@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite (Test)
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.2
+// @version      0.1.3
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -22,7 +22,7 @@
 //   Comment Cleaner v1.12 | youtube-comment-cleaner/youtube-comment-cleaner.user.js | sha256:0420d15b057b8bb64013eb5851d91e2d6a8814ce77fc6cea7b3977e1c759da75
 //   Feed UI Cleaner v2.1 | youtube-feed-ui-cleaner/youtube-feed-ui-cleaner.user.js | sha256:19af26bb527c54741a2a7460e211f1c5dd2e40a4956adb4fcd52e0fa224ff1dc
 //   Miniplayer Button Restorer v1.2 | youtube-miniplayer-button-restorer/youtube-miniplayer-button-restorer.user.js | sha256:40587d46d48c35a77c7e629db331f36bb60c1c69c3fc8b8fac8772c378e9e2dd
-//   Player Preferences Lite v1.26 | youtube-player-preferences-lite/youtube-player-preferences-lite.user.js | sha256:4125476aba07e1c0c23040073aa8a57ddca84a8fb47c203b858470d8224d2bbb
+//   Player Preferences Lite v1.27 | youtube-player-preferences-lite/youtube-player-preferences-lite.user.js | sha256:7c816e1a87961d8a56e380c3f54710b71e61401c42ad3090f361983ec6cf48bb
 //   Scroll Miniplayer v5.5 | youtube-scroll-miniplayer/youtube-scroll-miniplayer.user.js | sha256:a15fb983cf8dab4a952fb615a363f781a5194314ad990b15f68da9fb6b4d7dc7
 //   Watch Layout Cleaner v1.24 | youtube-watch-layout-cleaner/youtube-watch-layout-cleaner.user.js | sha256:a5dc9044afa9c8aa16c979efbf3eefded17928d994c8d6b16f03ca6a396c4eee
 //   SponsorBlock Queue Width (folded into Watch Layout Cleaner) v1 | sources/youtube-sponsorblock-queue-width.user.js | sha256:f9c299d4a49eb8f8a230903471324c20dd25a5e825f551b7b440c29336bce9c4
@@ -1516,7 +1516,7 @@
 
   suite.registerModule(
     "playerPreferencesLite",
-    "Player Preferences Lite v1.26",
+    "Player Preferences Lite v1.27",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -3598,7 +3598,15 @@
 
           return `
               .html5-video-player .ytp-cards-button,
-              .html5-video-player .ytp-paid-content-overlay {
+              .html5-video-player .ytp-paid-content-overlay,
+              .html5-video-player .ytp-endscreen-content,
+              .html5-video-player .ytp-endscreen-previous,
+              .html5-video-player .ytp-endscreen-next,
+              .html5-video-player .ytp-endscreen-paginate,
+              .html5-video-player .ytp-videowall-still,
+              .html5-video-player .ytp-modern-videowall-still,
+              .html5-video-player .ytp-fullscreen-grid-stills-container,
+              .html5-video-player .ytp-autonav-endscreen-upnext-container {
                 display: none !important;
                 opacity: 0 !important;
                 pointer-events: none !important;
@@ -3608,11 +3616,7 @@
               .html5-video-player .ytp-ce-element,
               .html5-video-player .ytp-ce-covering-overlay,
               .html5-video-player .ytp-ce-expanding-overlay,
-              .html5-video-player .ytp-ce-hide-button-container,
-              .html5-video-player .ytp-endscreen-content,
-              .html5-video-player .ytp-endscreen-previous,
-              .html5-video-player .ytp-endscreen-next,
-              .html5-video-player .ytp-endscreen-paginate {
+              .html5-video-player .ytp-ce-hide-button-container {
                 opacity: 0 !important;
                 pointer-events: none !important;
               }

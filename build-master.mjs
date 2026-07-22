@@ -326,7 +326,7 @@ ${body
 const output = `// ==UserScript==
 // @name         YouTube Master Suite (Test)
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.2
+// @version      0.1.3
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
