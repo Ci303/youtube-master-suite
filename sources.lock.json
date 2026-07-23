@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "modules": {
+    "commentCleaner": {
+      "repository": "Ci303/youtube-comment-cleaner",
+      "commit": "a43cbcf1766b8dd5332ab07673f2610fe4cbfdfd",
+      "path": "youtube-comment-cleaner.user.js",
+      "vendoredPath": "sources/modules/youtube-comment-cleaner.user.js",
+      "sha256": "0420d15b057b8bb64013eb5851d91e2d6a8814ce77fc6cea7b3977e1c759da75"
+    },
+    "feedUiCleaner": {
+      "repository": "Ci303/youtube-feed-ui-cleaner",
+      "commit": "18a6c8d6b39da64a941d5cd298cb8603e4265936",
+      "path": "youtube-feed-ui-cleaner.user.js",
+      "vendoredPath": "sources/modules/youtube-feed-ui-cleaner.user.js",
+      "sha256": "19af26bb527c54741a2a7460e211f1c5dd2e40a4956adb4fcd52e0fa224ff1dc"
+    },
+    "miniplayerButtonRestorer": {
+      "repository": "Ci303/youtube-miniplayer-button-restorer",
+      "commit": "d8d7a23da11cf048bc8cff6f6778c73f2e4dee6b",
+      "path": "youtube-miniplayer-button-restorer.user.js",
+      "vendoredPath": "sources/modules/youtube-miniplayer-button-restorer.user.js",
+      "sha256": "40587d46d48c35a77c7e629db331f36bb60c1c69c3fc8b8fac8772c378e9e2dd"
+    },
+    "playerPreferencesLite": {
+      "repository": "Ci303/youtube-player-preferences-lite",
+      "commit": "8dfb445c93259e1b5126c3a8d9e2a732a4f9b140",
+      "path": "youtube-player-preferences-lite.user.js",
+      "vendoredPath": "sources/modules/youtube-player-preferences-lite.user.js",
+      "sha256": "15d949bc29f40a40693e7f4681b683e7e8e780b5000d22016464582bb8ed4c2d"
+    },
+    "scrollMiniplayer": {
+      "repository": "Ci303/youtube-scroll-miniplayer",
+      "commit": "389864d747440aa8f0ccfc85d0875a39b341e228",
+      "path": "youtube-scroll-miniplayer.user.js",
+      "vendoredPath": "sources/modules/youtube-scroll-miniplayer.user.js",
+      "sha256": "a15fb983cf8dab4a952fb615a363f781a5194314ad990b15f68da9fb6b4d7dc7"
+    },
+    "watchLayoutCleaner": {
+      "repository": "Ci303/youtube-watch-layout-cleaner",
+      "commit": "0b08b0aac72654da72e133da2fa31eed0b8ea2f2",
+      "path": "youtube-watch-layout-cleaner.user.js",
+      "vendoredPath": "sources/modules/youtube-watch-layout-cleaner.user.js",
+      "sha256": "a5dc9044afa9c8aa16c979efbf3eefded17928d994c8d6b16f03ca6a396c4eee"
+    }
+  }
+}

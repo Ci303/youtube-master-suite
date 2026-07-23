@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite (Test)
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.3
+// @version      0.1.4
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -19,12 +19,12 @@
 // then rebuild; do not edit generated module bodies directly.
 //
 // Source manifest:
-//   Comment Cleaner v1.12 | youtube-comment-cleaner/youtube-comment-cleaner.user.js | sha256:0420d15b057b8bb64013eb5851d91e2d6a8814ce77fc6cea7b3977e1c759da75
-//   Feed UI Cleaner v2.1 | youtube-feed-ui-cleaner/youtube-feed-ui-cleaner.user.js | sha256:19af26bb527c54741a2a7460e211f1c5dd2e40a4956adb4fcd52e0fa224ff1dc
-//   Miniplayer Button Restorer v1.2 | youtube-miniplayer-button-restorer/youtube-miniplayer-button-restorer.user.js | sha256:40587d46d48c35a77c7e629db331f36bb60c1c69c3fc8b8fac8772c378e9e2dd
-//   Player Preferences Lite v1.27 | youtube-player-preferences-lite/youtube-player-preferences-lite.user.js | sha256:7c816e1a87961d8a56e380c3f54710b71e61401c42ad3090f361983ec6cf48bb
-//   Scroll Miniplayer v5.5 | youtube-scroll-miniplayer/youtube-scroll-miniplayer.user.js | sha256:a15fb983cf8dab4a952fb615a363f781a5194314ad990b15f68da9fb6b4d7dc7
-//   Watch Layout Cleaner v1.24 | youtube-watch-layout-cleaner/youtube-watch-layout-cleaner.user.js | sha256:a5dc9044afa9c8aa16c979efbf3eefded17928d994c8d6b16f03ca6a396c4eee
+//   Comment Cleaner v1.12 | youtube-comment-cleaner/youtube-comment-cleaner.user.js | commit:a43cbcf1766b8dd5332ab07673f2610fe4cbfdfd | sha256:0420d15b057b8bb64013eb5851d91e2d6a8814ce77fc6cea7b3977e1c759da75
+//   Feed UI Cleaner v2.1 | youtube-feed-ui-cleaner/youtube-feed-ui-cleaner.user.js | commit:18a6c8d6b39da64a941d5cd298cb8603e4265936 | sha256:19af26bb527c54741a2a7460e211f1c5dd2e40a4956adb4fcd52e0fa224ff1dc
+//   Miniplayer Button Restorer v1.2 | youtube-miniplayer-button-restorer/youtube-miniplayer-button-restorer.user.js | commit:d8d7a23da11cf048bc8cff6f6778c73f2e4dee6b | sha256:40587d46d48c35a77c7e629db331f36bb60c1c69c3fc8b8fac8772c378e9e2dd
+//   Player Preferences Lite v1.28 | youtube-player-preferences-lite/youtube-player-preferences-lite.user.js | commit:8dfb445c93259e1b5126c3a8d9e2a732a4f9b140 | sha256:15d949bc29f40a40693e7f4681b683e7e8e780b5000d22016464582bb8ed4c2d
+//   Scroll Miniplayer v5.5 | youtube-scroll-miniplayer/youtube-scroll-miniplayer.user.js | commit:389864d747440aa8f0ccfc85d0875a39b341e228 | sha256:a15fb983cf8dab4a952fb615a363f781a5194314ad990b15f68da9fb6b4d7dc7
+//   Watch Layout Cleaner v1.24 | youtube-watch-layout-cleaner/youtube-watch-layout-cleaner.user.js | commit:0b08b0aac72654da72e133da2fa31eed0b8ea2f2 | sha256:a5dc9044afa9c8aa16c979efbf3eefded17928d994c8d6b16f03ca6a396c4eee
 //   SponsorBlock Queue Width (folded into Watch Layout Cleaner) v1 | sources/youtube-sponsorblock-queue-width.user.js | sha256:f9c299d4a49eb8f8a230903471324c20dd25a5e825f551b7b440c29336bce9c4
 
 (() => {
@@ -37,6 +37,10 @@
     playerPreferencesLite: true,
     scrollMiniplayer: true,
     watchLayoutCleaner: true,
+  });
+  const DIAGNOSTICS = Object.freeze({
+    enabled: false,
+    reportIntervalMs: 30000,
   });
 
   const NativeMutationObserver = globalThis.MutationObserver;
@@ -58,14 +62,73 @@
   const sharedMutationObservers = new Set();
   const styleParts = new Map();
   const idleModules = [];
+  const diagnosticStats = new Map();
   let nativeMutationObserver = null;
   let styleElement = null;
   let batchDepth = 0;
+  let activeModuleId = "suite";
   let mutationRefreshPending = false;
   let styleRenderPending = false;
 
   function reportModuleError(label, error) {
     console.error(`[YouTube Master Suite] ${label} failed`, error);
+  }
+
+  function now() {
+    return globalThis.performance?.now?.() ?? Date.now();
+  }
+
+  function runWithDiagnostics(moduleId, operation, units, callback) {
+    if (!DIAGNOSTICS.enabled) {
+      return callback();
+    }
+
+    const startedAt = now();
+    try {
+      return callback();
+    } finally {
+      const elapsedMs = now() - startedAt;
+      const key = `${moduleId}:${operation}`;
+      const current = diagnosticStats.get(key) || {
+        module: moduleId,
+        operation,
+        calls: 0,
+        units: 0,
+        totalMs: 0,
+        maxMs: 0,
+      };
+      current.calls += 1;
+      current.units += units;
+      current.totalMs += elapsedMs;
+      current.maxMs = Math.max(current.maxMs, elapsedMs);
+      diagnosticStats.set(key, current);
+    }
+  }
+
+  function getDiagnosticsSnapshot() {
+    return [...diagnosticStats.values()].map((entry) => ({
+      ...entry,
+      averageMs: entry.calls ? entry.totalMs / entry.calls : 0,
+    }));
+  }
+
+  function reportDiagnostics() {
+    const snapshot = getDiagnosticsSnapshot();
+    if (snapshot.length) {
+      console.table(snapshot);
+    }
+    return snapshot;
+  }
+
+  function installDiagnostics() {
+    if (!DIAGNOSTICS.enabled) return;
+
+    globalThis.__YT_MASTER_DIAGNOSTICS__ = Object.freeze({
+      clear: () => diagnosticStats.clear(),
+      report: reportDiagnostics,
+      snapshot: getDiagnosticsSnapshot,
+    });
+    setInterval(reportDiagnostics, DIAGNOSTICS.reportIntervalMs);
   }
 
   function beginBatch() {
@@ -93,8 +156,15 @@
   }
 
   function addWindowListener(type, listener, options) {
+    const ownerId = activeModuleId;
     if (!SHARED_WINDOW_EVENTS.has(type)) {
-      globalThis.addEventListener(type, listener, options);
+      const registeredListener = DIAGNOSTICS.enabled
+        ? (event) =>
+            runWithDiagnostics(ownerId, `event:${type}`, 1, () =>
+              invokeEventListener(listener, event),
+            )
+        : listener;
+      globalThis.addEventListener(type, registeredListener, options);
       return;
     }
 
@@ -109,7 +179,12 @@
         (event) => {
           for (const registeredListener of [...group.listeners]) {
             try {
-              invokeEventListener(registeredListener, event);
+              runWithDiagnostics(
+                registeredListener.ownerId,
+                `event:${type}`,
+                1,
+                () => invokeEventListener(registeredListener.listener, event),
+              );
             } catch (error) {
               reportModuleError(`${type} event listener`, error);
             }
@@ -118,7 +193,7 @@
         capture,
       );
     }
-    group.listeners.push(listener);
+    group.listeners.push({ listener, ownerId });
   }
 
   function mutationMatches(observer, mutation) {
@@ -151,7 +226,12 @@
       if (!matchingMutations.length) continue;
 
       try {
-        observer.callback(matchingMutations, observer);
+        runWithDiagnostics(
+          observer.ownerId,
+          "mutation",
+          matchingMutations.length,
+          () => observer.callback(matchingMutations, observer),
+        );
       } catch (error) {
         reportModuleError("mutation observer callback", error);
       }
@@ -212,6 +292,7 @@
         throw new TypeError("MutationObserver callback must be a function");
       }
       this.callback = callback;
+      this.ownerId = activeModuleId;
       this.target = null;
       this.options = null;
       this.active = false;
@@ -285,10 +366,14 @@
 
   function executeModule(id, label, initialise) {
     if (!ENABLED_MODULES[id]) return;
+    const previousModuleId = activeModuleId;
+    activeModuleId = id;
     try {
-      initialise();
+      runWithDiagnostics(id, "initialise", 1, initialise);
     } catch (error) {
       reportModuleError(label, error);
+    } finally {
+      activeModuleId = previousModuleId;
     }
   }
 
@@ -326,6 +411,8 @@
     removeStyle,
     setStyle,
   };
+
+  installDiagnostics();
 
   suite.registerModule(
     "commentCleaner",
@@ -1516,7 +1603,7 @@
 
   suite.registerModule(
     "playerPreferencesLite",
-    "Player Preferences Lite v1.27",
+    "Player Preferences Lite v1.28",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -1841,6 +1928,10 @@
 
         function isShortsPath() {
           return location.pathname.startsWith("/shorts/");
+        }
+
+        function isHistoryPath() {
+          return location.pathname === "/feed/history";
         }
 
         function isExcludedSurface(target) {
@@ -2260,6 +2351,16 @@
         }
 
         function hideWatchedVideos(root = document) {
+          if (isHistoryPath()) {
+            collectMatchingElements(
+              root,
+              '[data-ytppl-watched-hidden="1"]',
+            ).forEach((card) => {
+              setCardHidden(card, "ytpplWatchedHidden", false);
+            });
+            return;
+          }
+
           hideMatchingCards(
             root,
             CONFIG.hideWatchedVideos,

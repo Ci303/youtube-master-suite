@@ -3,13 +3,18 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const MASTER_VERSION = "0.1.4";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoriesDirectory = resolve(suiteDirectory, "..");
 const outputPath = join(suiteDirectory, "youtube-master-suite.user.js");
+const sourceLockPath = join(suiteDirectory, "sources.lock.json");
 const sponsorBlockQueueWidthSourcePath = join(
   suiteDirectory,
   "sources/youtube-sponsorblock-queue-width.user.js",
 );
+const useLocalSources = process.argv.includes("--local");
+const checkOnly = process.argv.includes("--check");
+const sourceLock = JSON.parse(readFileSync(sourceLockPath, "utf8"));
 
 const modules = [
   {
@@ -59,6 +64,44 @@ function normaliseNewlines(value) {
 
 function sha256(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function getLockedSource(moduleDefinition) {
+  const lockedSource = sourceLock.modules?.[moduleDefinition.id];
+  if (!lockedSource) {
+    throw new Error(`Missing source lock for ${moduleDefinition.id}`);
+  }
+  if (!/^[0-9a-f]{40}$/.test(lockedSource.commit)) {
+    throw new Error(`Invalid locked commit for ${moduleDefinition.id}`);
+  }
+  return lockedSource;
+}
+
+async function readModuleSource(moduleDefinition) {
+  const lockedSource = getLockedSource(moduleDefinition);
+  if (useLocalSources) {
+    const absolutePath = join(repositoriesDirectory, moduleDefinition.source);
+    return {
+      revision: lockedSource.commit,
+      source: normaliseNewlines(readFileSync(absolutePath, "utf8")),
+    };
+  }
+
+  if (!lockedSource.vendoredPath || !/^[0-9a-f]{64}$/.test(lockedSource.sha256)) {
+    throw new Error(`${moduleDefinition.id}: incomplete vendored source lock`);
+  }
+  const vendoredPath = join(suiteDirectory, lockedSource.vendoredPath);
+  const source = normaliseNewlines(readFileSync(vendoredPath, "utf8"));
+  if (sha256(source) !== lockedSource.sha256) {
+    throw new Error(
+      `${moduleDefinition.id}: vendored source does not match its locked hash`,
+    );
+  }
+
+  return {
+    revision: lockedSource.commit,
+    source,
+  };
 }
 
 function extractMetadata(source, field) {
@@ -263,21 +306,23 @@ function transformModuleBody(moduleDefinition, body) {
   return transformed;
 }
 
-const sourceModules = modules.map((moduleDefinition) => {
-  const absolutePath = join(repositoriesDirectory, moduleDefinition.source);
-  const source = normaliseNewlines(readFileSync(absolutePath, "utf8"));
-  const body = transformModuleBody(
-    moduleDefinition,
-    extractModuleBody(source, moduleDefinition.source),
-  );
+const sourceModules = await Promise.all(
+  modules.map(async (moduleDefinition) => {
+    const { revision, source } = await readModuleSource(moduleDefinition);
+    const body = transformModuleBody(
+      moduleDefinition,
+      extractModuleBody(source, moduleDefinition.source),
+    );
 
-  return {
-    ...moduleDefinition,
-    version: extractMetadata(source, "version"),
-    sourceHash: sha256(source),
-    body,
-  };
-});
+    return {
+      ...moduleDefinition,
+      revision,
+      version: extractMetadata(source, "version"),
+      sourceHash: sha256(source),
+      body,
+    };
+  }),
+);
 
 const sponsorBlockQueueWidthSource = normaliseNewlines(
   readFileSync(sponsorBlockQueueWidthSourcePath, "utf8"),
@@ -295,8 +340,8 @@ const moduleSwitches = sourceModules
 
 const sourceManifest = sourceModules
   .map(
-    ({ label, source, version, sourceHash }) =>
-      `//   ${label} v${version} | ${source} | sha256:${sourceHash}`,
+    ({ label, source, version, sourceHash, revision }) =>
+      `//   ${label} v${version} | ${source} | commit:${revision} | sha256:${sourceHash}`,
   )
   .concat(
     `//   ${sponsorBlockQueueWidthManifest.label} v${sponsorBlockQueueWidthManifest.version} | ${sponsorBlockQueueWidthManifest.source} | sha256:${sponsorBlockQueueWidthManifest.sourceHash}`,
@@ -326,7 +371,7 @@ ${body
 const output = `// ==UserScript==
 // @name         YouTube Master Suite (Test)
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.3
+// @version      ${MASTER_VERSION}
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -352,6 +397,10 @@ ${sourceManifest}
   const ENABLED_MODULES = Object.freeze({
 ${moduleSwitches}
   });
+  const DIAGNOSTICS = Object.freeze({
+    enabled: false,
+    reportIntervalMs: 30000,
+  });
 
   const NativeMutationObserver = globalThis.MutationObserver;
   const SHARED_WINDOW_EVENTS = new Set([
@@ -367,14 +416,73 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
   const sharedMutationObservers = new Set();
   const styleParts = new Map();
   const idleModules = [];
+  const diagnosticStats = new Map();
   let nativeMutationObserver = null;
   let styleElement = null;
   let batchDepth = 0;
+  let activeModuleId = "suite";
   let mutationRefreshPending = false;
   let styleRenderPending = false;
 
   function reportModuleError(label, error) {
     console.error(\`[YouTube Master Suite] \${label} failed\`, error);
+  }
+
+  function now() {
+    return globalThis.performance?.now?.() ?? Date.now();
+  }
+
+  function runWithDiagnostics(moduleId, operation, units, callback) {
+    if (!DIAGNOSTICS.enabled) {
+      return callback();
+    }
+
+    const startedAt = now();
+    try {
+      return callback();
+    } finally {
+      const elapsedMs = now() - startedAt;
+      const key = \`\${moduleId}:\${operation}\`;
+      const current = diagnosticStats.get(key) || {
+        module: moduleId,
+        operation,
+        calls: 0,
+        units: 0,
+        totalMs: 0,
+        maxMs: 0,
+      };
+      current.calls += 1;
+      current.units += units;
+      current.totalMs += elapsedMs;
+      current.maxMs = Math.max(current.maxMs, elapsedMs);
+      diagnosticStats.set(key, current);
+    }
+  }
+
+  function getDiagnosticsSnapshot() {
+    return [...diagnosticStats.values()].map((entry) => ({
+      ...entry,
+      averageMs: entry.calls ? entry.totalMs / entry.calls : 0,
+    }));
+  }
+
+  function reportDiagnostics() {
+    const snapshot = getDiagnosticsSnapshot();
+    if (snapshot.length) {
+      console.table(snapshot);
+    }
+    return snapshot;
+  }
+
+  function installDiagnostics() {
+    if (!DIAGNOSTICS.enabled) return;
+
+    globalThis.__YT_MASTER_DIAGNOSTICS__ = Object.freeze({
+      clear: () => diagnosticStats.clear(),
+      report: reportDiagnostics,
+      snapshot: getDiagnosticsSnapshot,
+    });
+    setInterval(reportDiagnostics, DIAGNOSTICS.reportIntervalMs);
   }
 
   function beginBatch() {
@@ -402,8 +510,15 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
   }
 
   function addWindowListener(type, listener, options) {
+    const ownerId = activeModuleId;
     if (!SHARED_WINDOW_EVENTS.has(type)) {
-      globalThis.addEventListener(type, listener, options);
+      const registeredListener = DIAGNOSTICS.enabled
+        ? (event) =>
+            runWithDiagnostics(ownerId, \`event:\${type}\`, 1, () =>
+              invokeEventListener(listener, event),
+            )
+        : listener;
+      globalThis.addEventListener(type, registeredListener, options);
       return;
     }
 
@@ -418,7 +533,12 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
         (event) => {
           for (const registeredListener of [...group.listeners]) {
             try {
-              invokeEventListener(registeredListener, event);
+              runWithDiagnostics(
+                registeredListener.ownerId,
+                \`event:\${type}\`,
+                1,
+                () => invokeEventListener(registeredListener.listener, event),
+              );
             } catch (error) {
               reportModuleError(\`\${type} event listener\`, error);
             }
@@ -427,7 +547,7 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
         capture,
       );
     }
-    group.listeners.push(listener);
+    group.listeners.push({ listener, ownerId });
   }
 
   function mutationMatches(observer, mutation) {
@@ -460,7 +580,12 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
       if (!matchingMutations.length) continue;
 
       try {
-        observer.callback(matchingMutations, observer);
+        runWithDiagnostics(
+          observer.ownerId,
+          "mutation",
+          matchingMutations.length,
+          () => observer.callback(matchingMutations, observer),
+        );
       } catch (error) {
         reportModuleError("mutation observer callback", error);
       }
@@ -521,6 +646,7 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
         throw new TypeError("MutationObserver callback must be a function");
       }
       this.callback = callback;
+      this.ownerId = activeModuleId;
       this.target = null;
       this.options = null;
       this.active = false;
@@ -594,10 +720,14 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
 
   function executeModule(id, label, initialise) {
     if (!ENABLED_MODULES[id]) return;
+    const previousModuleId = activeModuleId;
+    activeModuleId = id;
     try {
-      initialise();
+      runWithDiagnostics(id, "initialise", 1, initialise);
     } catch (error) {
       reportModuleError(label, error);
+    } finally {
+      activeModuleId = previousModuleId;
     }
   }
 
@@ -635,12 +765,24 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
     removeStyle,
     setStyle,
   };
+
+  installDiagnostics();
 ${moduleInitialisers}
 
   startIdleModules();
 })();
 `;
 
-writeFileSync(outputPath, output, "utf8");
-console.log(`Wrote ${outputPath}`);
+if (checkOnly) {
+  const existingOutput = readFileSync(outputPath, "utf8");
+  if (existingOutput !== output) {
+    throw new Error(
+      `${outputPath} is stale; run node build-master.mjs before publishing`,
+    );
+  }
+  console.log(`Verified ${outputPath}`);
+} else {
+  writeFileSync(outputPath, output, "utf8");
+  console.log(`Wrote ${outputPath}`);
+}
 console.log(`SHA-256 ${sha256(output)}`);

@@ -17,7 +17,7 @@ behaviour is validated against YouTube's frequently changing interface.
 | Comment Cleaner | 1.12 | Hides comment engagement and composer clutter, compacts spacing, and distinguishes uploader and commenter names. |
 | Feed UI Cleaner | 2.1 | Removes unwanted feed shelves, chips, advertisements, mixes, members-only cards, podcasts, and resulting gaps. |
 | Miniplayer Button Restorer | 1.2 | Restores the native-style miniplayer control when YouTube omits it. |
-| Player Preferences Lite | 1.27 | Applies player, feed, description, live-chat, volume, quality, Shorts, and watch-page preferences without taking over YouTube's queue or native miniplayer. |
+| Player Preferences Lite | 1.28 | Applies player, feed, description, live-chat, volume, quality, Shorts, and watch-page preferences without taking over YouTube's queue or native miniplayer. Watched-video filtering deliberately excludes Watch History. |
 | Scroll Miniplayer | 5.5 | Floats the active watch or live player when it leaves the viewport. |
 | Watch Layout Cleaner | 1.24 | Expands watch-page content, manages the right rail, widens metadata and comments, and provides queue-thumbnail fallbacks. |
 | SponsorBlock Queue Width | 1 | Contributes its fixed `374px` right-rail rules to Watch Layout Cleaner for SponsorBlock notice and queue alignment. |
@@ -47,8 +47,9 @@ independent userscripts unchanged.
   debugging without rebuilding the individual scripts.
 
 The source manifest embedded near the top of the generated userscript records
-each input version and SHA-256 hash. The build fails when a guarded integration
-point changes, preventing an upstream edit from being silently omitted.
+each input version, exact Git commit and SHA-256 hash. The build fails when a
+vendored source differs from its lock or when a guarded integration point
+changes, preventing an upstream edit from being silently omitted.
 
 ## Installation
 
@@ -89,49 +90,95 @@ Set one entry to `false` only when isolating a fault. Feature-specific settings
 remain inside their corresponding generated module and originate from the
 component source scripts.
 
+### Optional diagnostics
+
+Runtime diagnostics are compiled into the master but disabled by default:
+
+```javascript
+const DIAGNOSTICS = Object.freeze({
+  enabled: false,
+  reportIntervalMs: 30000,
+});
+```
+
+When enabled for a temporary investigation, the master records module
+initialisation time, shared lifecycle-event time, mutation callback time and
+the number of mutation records processed. It reports periodically in the
+developer console and exposes:
+
+```javascript
+__YT_MASTER_DIAGNOSTICS__.snapshot()
+__YT_MASTER_DIAGNOSTICS__.report()
+__YT_MASTER_DIAGNOSTICS__.clear()
+```
+
+Leave diagnostics disabled during normal use.
+
 ## Repository layout
 
 ```text
 youtube-master-suite/
 |-- build-master.mjs
+|-- refresh-source-lock.mjs
+|-- verify-master.mjs
+|-- sources.lock.json
 |-- youtube-master-suite.user.js
 |-- sources/
+|   |-- modules/
+|   |   `-- <six pinned component userscripts>
 |   `-- youtube-sponsorblock-queue-width.user.js
 |-- .gitignore
 `-- README.md
 ```
 
 - `build-master.mjs` is the consolidation logic and build entry point.
+- `sources.lock.json` pins every component to an exact repository commit and
+  SHA-256 hash.
+- `refresh-source-lock.mjs` verifies the sibling source repositories and
+  refreshes the pinned, vendored source snapshots.
+- `verify-master.mjs` checks reproducibility, syntax, metadata, source locks,
+  shared infrastructure, route exclusions, diagnostics defaults and the local
+  manual-install copy.
 - `youtube-master-suite.user.js` is the generated, installable artefact.
+- `sources/modules/` makes a clean clone reproducible without separately
+  cloning or importing the six component repositories.
 - `sources/youtube-sponsorblock-queue-width.user.js` preserves the standalone
   source that is folded into Watch Layout Cleaner.
 - `youtube-master-suite.txt` is a local manual-install copy and is deliberately
   ignored because the `.user.js` file is the canonical published artefact.
 
-## Building
+## Building and verification
 
-The following sibling repositories are expected beside this repository:
-
-```text
-youtube-comment-cleaner
-youtube-feed-ui-cleaner
-youtube-miniplayer-button-restorer
-youtube-player-preferences-lite
-youtube-scroll-miniplayer
-youtube-watch-layout-cleaner
-youtube-master-suite
-```
-
-Build and validate from the master repository:
+A normal build uses the committed source lock and vendored snapshots, so a
+clean clone is sufficient:
 
 ```powershell
 node .\build-master.mjs
-node --check .\youtube-master-suite.user.js
-git diff --check
+node .\verify-master.mjs
 ```
 
-Run the build twice and compare hashes when changing the generator. Identical
-inputs must produce an identical userscript.
+`node .\build-master.mjs --check` verifies that the generated userscript is
+current without writing it. `node .\verify-master.mjs --release` additionally
+requires a clean, upstream-synchronised maintainer checkout and a matching
+local `.txt` copy.
+
+Identical locked inputs produce an identical userscript and SHA-256 hash.
+
+### Refreshing component sources
+
+Maintainers keep the six component repositories beside this repository. After
+a component change has been committed and pushed:
+
+```powershell
+node .\refresh-source-lock.mjs
+node .\build-master.mjs
+Copy-Item .\youtube-master-suite.user.js .\youtube-master-suite.txt -Force
+node .\verify-master.mjs
+```
+
+The refresh command refuses dirty, non-`main` or upstream-diverged component
+repositories. This ensures the public master never embeds an unpublished
+working-tree version.
 
 ## TampermonkeyFS workflow
 
@@ -148,11 +195,13 @@ File...**, and choose the generated `.user.js` file.
 
 TampermonkeyFS is editor-centred. A permanent change should follow this flow:
 
-1. Edit the relevant component source or `build-master.mjs`.
-2. Run `node .\build-master.mjs`.
-3. Let TampermonkeyFS load the changed linked file into its virtual editor.
-4. Save the virtual editor to send the same source to Tampermonkey.
-5. Verify that the installed and repository sources match before committing.
+1. Edit, validate, commit and push the relevant component source.
+2. Run `node .\refresh-source-lock.mjs`.
+3. Increase the master version and run `node .\build-master.mjs`.
+4. Run `node .\verify-master.mjs`.
+5. Let TampermonkeyFS load the changed linked file into its virtual editor.
+6. Save the virtual editor to send the same source to Tampermonkey.
+7. Verify that the installed and repository sources match before committing.
 
 Direct edits to the generated userscript can be overwritten by the next build.
 
@@ -161,14 +210,13 @@ Direct edits to the generated userscript can be overwritten by the next build.
 Before publishing a new version:
 
 1. Increase the master `@version` in `build-master.mjs`.
-2. Rebuild twice and confirm deterministic output.
-3. Run `node --check youtube-master-suite.user.js`.
-4. Run `git diff --check`.
-5. Confirm all expected module registrations, the single native mutation
-   observer, and the single stylesheet creation remain present.
-6. Test YouTube home and subscription feeds, watch-page SPA navigation,
+2. Refresh and review `sources.lock.json`.
+3. Rebuild and run `node .\verify-master.mjs`.
+4. Confirm the route-policy checks cover any new exclusions.
+5. Test YouTube home, History and subscription feeds, watch-page SPA navigation,
    comments, queue changes, the restored miniplayer button, scroll miniplayer,
    fullscreen transitions, live pages, and the `374px` SponsorBlock queue.
+6. Commit and push, then run `node .\verify-master.mjs --release`.
 7. Confirm the installed Tampermonkey source matches the generated file.
 
 ## Compatibility and limitations
