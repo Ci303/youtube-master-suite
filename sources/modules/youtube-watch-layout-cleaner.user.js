@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Watch Layout Cleaner
 // @namespace    Citizen.youtube.watch-layout-cleaner
-// @version      1.24
+// @version      1.25
 // @description  Expands YouTube watch pages, keeps the right rail fixed at SponsorBlock-friendly width, and widens metadata/comments.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-watch-layout-cleaner
@@ -138,8 +138,7 @@ ytd-playlist-panel-renderer [${QUEUE_THUMBNAIL_FALLBACK_ATTRIBUTE}="1"] {
 
 /* Leave only comments below the video once YouTube switches to its narrow layout. */
 @media (max-width: ${px(CONFIG.relatedVideosHideBreakpointPx)}) {
-  #related,
-  ytd-watch-next-secondary-results-renderer {
+  #related {
     display: none !important;
   }
 }

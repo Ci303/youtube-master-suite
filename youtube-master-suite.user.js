@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.9
+// @version      0.1.10
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -19,12 +19,12 @@
 // then rebuild; do not edit generated module bodies directly.
 //
 // Source manifest:
-//   Comment Cleaner v1.12 | youtube-comment-cleaner/youtube-comment-cleaner.user.js | commit:1ff50aaa885b11d11e807798770022b8ac9b2b6d | sha256:0420d15b057b8bb64013eb5851d91e2d6a8814ce77fc6cea7b3977e1c759da75
-//   Feed UI Cleaner v2.1 | youtube-feed-ui-cleaner/youtube-feed-ui-cleaner.user.js | commit:8f7280555bb0b8e691c5a237c34d67a52e01836a | sha256:19af26bb527c54741a2a7460e211f1c5dd2e40a4956adb4fcd52e0fa224ff1dc
-//   Miniplayer Button Restorer v1.2 | youtube-miniplayer-button-restorer/youtube-miniplayer-button-restorer.user.js | commit:b51ecced36f0689f55b9c2d452c8ad1c223e883d | sha256:40587d46d48c35a77c7e629db331f36bb60c1c69c3fc8b8fac8772c378e9e2dd
-//   Player Preferences Lite v1.30 | youtube-player-preferences-lite/youtube-player-preferences-lite.user.js | commit:139414eab08ee646323c3bd44d948cd246c8d89a | sha256:98d494956e6d822dfc1f170a3a410358b15ce90c5db9777db26476a9b5341540
-//   Scroll Miniplayer v5.7 | youtube-scroll-miniplayer/youtube-scroll-miniplayer.user.js | commit:053177e23c54de7acbc7b0ff89b23b57dfefafdf | sha256:f97088457a6eab644ed66794fb68c91b71e88b081772e37d0e7f06edbc6fd582
-//   Watch Layout Cleaner v1.24 | youtube-watch-layout-cleaner/youtube-watch-layout-cleaner.user.js | commit:5d1c6b663eb35c4382acf6a705bab0c4e226f687 | sha256:a5dc9044afa9c8aa16c979efbf3eefded17928d994c8d6b16f03ca6a396c4eee
+//   Comment Cleaner v1.12 | youtube-comment-cleaner/youtube-comment-cleaner.user.js | commit:89c55de4fd032b16afd78ba87cb9f9f9cb01d110 | sha256:0420d15b057b8bb64013eb5851d91e2d6a8814ce77fc6cea7b3977e1c759da75
+//   Feed UI Cleaner v2.1 | youtube-feed-ui-cleaner/youtube-feed-ui-cleaner.user.js | commit:3e08d77c90eec368f2ca7e15c10a79edfcba9c59 | sha256:19af26bb527c54741a2a7460e211f1c5dd2e40a4956adb4fcd52e0fa224ff1dc
+//   Miniplayer Button Restorer v1.2 | youtube-miniplayer-button-restorer/youtube-miniplayer-button-restorer.user.js | commit:83b2834a49419a74e3272d99adc713b307f773c0 | sha256:40587d46d48c35a77c7e629db331f36bb60c1c69c3fc8b8fac8772c378e9e2dd
+//   Player Preferences Lite v1.31 | youtube-player-preferences-lite/youtube-player-preferences-lite.user.js | commit:6e7579a1b3cc29dd4fa5e5668d33c20562feeb58 | sha256:0ab7248947f329da7a869556ea33f1bd3d0507045f40a8971a8f479e3190c666
+//   Scroll Miniplayer v5.7 | youtube-scroll-miniplayer/youtube-scroll-miniplayer.user.js | commit:bcec8f33fb0f39128ebcf27eaa02a3065616920e | sha256:f97088457a6eab644ed66794fb68c91b71e88b081772e37d0e7f06edbc6fd582
+//   Watch Layout Cleaner v1.25 | youtube-watch-layout-cleaner/youtube-watch-layout-cleaner.user.js | commit:a446068fec072f4a80c8844361ac73ed12437339 | sha256:bcf15f6e55f62a3d012de72d28875fd5a6b69686e0bbf269653a392910df9fc8
 //   SponsorBlock Queue Width (folded into Watch Layout Cleaner) v1 | sources/youtube-sponsorblock-queue-width.user.js | sha256:f9c299d4a49eb8f8a230903471324c20dd25a5e825f551b7b440c29336bce9c4
 
 (() => {
@@ -1603,7 +1603,7 @@
 
   suite.registerModule(
     "playerPreferencesLite",
-    "Player Preferences Lite v1.30",
+    "Player Preferences Lite v1.31",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -3490,7 +3490,6 @@
           const rules = [];
           if (CONFIG.hideRelatedVideos) {
             rules.push(`
-              ytd-watch-flexy #secondary ytd-watch-next-secondary-results-renderer.style-scope,
               ytd-watch-flexy #secondary #related {
                 display: none !important;
               }
@@ -5390,7 +5389,7 @@
 
   suite.registerModule(
     "watchLayoutCleaner",
-    "Watch Layout Cleaner v1.24",
+    "Watch Layout Cleaner v1.25",
     "document-start",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -5527,8 +5526,7 @@
 
       /* Leave only comments below the video once YouTube switches to its narrow layout. */
       @media (max-width: ${px(CONFIG.relatedVideosHideBreakpointPx)}) {
-        #related,
-        ytd-watch-next-secondary-results-renderer {
+        #related {
           display: none !important;
         }
       }

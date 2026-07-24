@@ -154,6 +154,10 @@ assert(
   !userscript.includes("hideInfoCardsAndEndScreens"),
   "The combined overlay preference must not be reintroduced",
 );
+assert(
+  !userscript.includes("ytd-watch-next-secondary-results-renderer"),
+  "The responsive secondary-results renderer must remain available for comments",
+);
 for (const preference of [
   "hideInfoCards: true",
   "hideEndScreenRecommendationGrid: true",
