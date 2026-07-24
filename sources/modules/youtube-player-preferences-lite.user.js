@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Player Preferences Lite
 // @namespace    Citizen.youtube.player-preferences-lite
-// @version      1.29
+// @version      1.30
 // @description  Applies small YouTube player preferences without touching Enhancer-style miniplayer, queue, autoplay, or background playback controls.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-player-preferences-lite
@@ -40,7 +40,9 @@
     collapseDescriptionBlankRows: true,
     hideStructuredDescription: true,
     hideChat: true,
-    hideInfoCardsAndEndScreens: true,
+    hideInfoCards: true,
+    hideEndScreenRecommendationGrid: true,
+    showAutoplayUpNextCard: true,
     enableTheaterMode: true,
     enableHighestQuality: false,
     highestQualityRetryDelays: [0, 300, 1000, 2500, 5000, 10000],
@@ -2098,14 +2100,32 @@
       `;
   }
 
-  function buildPlayerOverlayCss() {
-    if (!CONFIG.hideInfoCardsAndEndScreens) {
+  function buildInfoCardCss() {
+    if (!CONFIG.hideInfoCards) {
       return "";
     }
 
     return `
         .html5-video-player .ytp-cards-button,
-        .html5-video-player .ytp-paid-content-overlay,
+        .html5-video-player .ytp-paid-content-overlay {
+          display: none !important;
+          opacity: 0 !important;
+          pointer-events: none !important;
+        }
+
+        .html5-video-player .ytp-cards-teaser {
+          opacity: 0 !important;
+          pointer-events: none !important;
+        }
+      `;
+  }
+
+  function buildEndScreenRecommendationCss() {
+    if (!CONFIG.hideEndScreenRecommendationGrid) {
+      return "";
+    }
+
+    return `
         .html5-video-player .ytp-endscreen-content,
         .html5-video-player .ytp-endscreen-previous,
         .html5-video-player .ytp-endscreen-next,
@@ -2118,7 +2138,6 @@
           pointer-events: none !important;
         }
 
-        .html5-video-player .ytp-cards-teaser,
         .html5-video-player .ytp-ce-element,
         .html5-video-player .ytp-ce-covering-overlay,
         .html5-video-player .ytp-ce-expanding-overlay,
@@ -2137,6 +2156,22 @@
       `;
   }
 
+  function buildAutoplayUpNextCss() {
+    // Keep this separate from recommendation grids: hiding the container while
+    // YouTube leaves Cancel/Play Now visible produces a blank autoplay card.
+    if (CONFIG.showAutoplayUpNextCard) {
+      return "";
+    }
+
+    return `
+        .html5-video-player .ytp-autonav-endscreen-upnext-container {
+          display: none !important;
+          opacity: 0 !important;
+          pointer-events: none !important;
+        }
+      `;
+  }
+
   function buildCss() {
     return [
       buildVolumeOverlayCss(),
@@ -2144,7 +2179,9 @@
       buildFeedCleanupCss(),
       buildWatchCleanupCss(),
       buildWatchLayoutCss(),
-      buildPlayerOverlayCss(),
+      buildInfoCardCss(),
+      buildEndScreenRecommendationCss(),
+      buildAutoplayUpNextCss(),
     ]
       .filter((css) => css.trim())
       .join("\n");

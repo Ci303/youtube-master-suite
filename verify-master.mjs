@@ -96,8 +96,23 @@ assert.match(
   "History must clear watched markers and return before filtering",
 );
 assert(
-  !userscript.includes(".ytp-autonav-endscreen-upnext-container"),
-  "The single autoplay up-next card must remain visible",
+  !userscript.includes("hideInfoCardsAndEndScreens"),
+  "The combined overlay preference must not be reintroduced",
+);
+for (const preference of [
+  "hideInfoCards: true",
+  "hideEndScreenRecommendationGrid: true",
+  "showAutoplayUpNextCard: true",
+]) {
+  assert(
+    userscript.includes(preference),
+    `Missing independent overlay preference: ${preference}`,
+  );
+}
+assert.match(
+  userscript,
+  /function buildAutoplayUpNextCss\(\) \{[\s\S]+?if \(CONFIG\.showAutoplayUpNextCard\) \{\s+return "";\s+\}[\s\S]+?\.ytp-autonav-endscreen-upnext-container/,
+  "The autoplay card must only be hidden when explicitly disabled",
 );
 assert(
   userscript.includes(".ytp-modern-videowall-still"),

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite (Test)
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.5
+// @version      0.1.6
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -22,7 +22,7 @@
 //   Comment Cleaner v1.12 | youtube-comment-cleaner/youtube-comment-cleaner.user.js | commit:a43cbcf1766b8dd5332ab07673f2610fe4cbfdfd | sha256:0420d15b057b8bb64013eb5851d91e2d6a8814ce77fc6cea7b3977e1c759da75
 //   Feed UI Cleaner v2.1 | youtube-feed-ui-cleaner/youtube-feed-ui-cleaner.user.js | commit:18a6c8d6b39da64a941d5cd298cb8603e4265936 | sha256:19af26bb527c54741a2a7460e211f1c5dd2e40a4956adb4fcd52e0fa224ff1dc
 //   Miniplayer Button Restorer v1.2 | youtube-miniplayer-button-restorer/youtube-miniplayer-button-restorer.user.js | commit:d8d7a23da11cf048bc8cff6f6778c73f2e4dee6b | sha256:40587d46d48c35a77c7e629db331f36bb60c1c69c3fc8b8fac8772c378e9e2dd
-//   Player Preferences Lite v1.29 | youtube-player-preferences-lite/youtube-player-preferences-lite.user.js | commit:bf9d59995c7cc2e225dfc3ac931326a87eebd54f | sha256:0b128c1751efce9c23be054229163f06ea47c37a2ee5f85f415f6ad688e2d223
+//   Player Preferences Lite v1.30 | youtube-player-preferences-lite/youtube-player-preferences-lite.user.js | commit:fa0fb9352e6df6d6301e918a6fac78ce81b1cb0a | sha256:98d494956e6d822dfc1f170a3a410358b15ce90c5db9777db26476a9b5341540
 //   Scroll Miniplayer v5.5 | youtube-scroll-miniplayer/youtube-scroll-miniplayer.user.js | commit:389864d747440aa8f0ccfc85d0875a39b341e228 | sha256:a15fb983cf8dab4a952fb615a363f781a5194314ad990b15f68da9fb6b4d7dc7
 //   Watch Layout Cleaner v1.24 | youtube-watch-layout-cleaner/youtube-watch-layout-cleaner.user.js | commit:0b08b0aac72654da72e133da2fa31eed0b8ea2f2 | sha256:a5dc9044afa9c8aa16c979efbf3eefded17928d994c8d6b16f03ca6a396c4eee
 //   SponsorBlock Queue Width (folded into Watch Layout Cleaner) v1 | sources/youtube-sponsorblock-queue-width.user.js | sha256:f9c299d4a49eb8f8a230903471324c20dd25a5e825f551b7b440c29336bce9c4
@@ -1603,7 +1603,7 @@
 
   suite.registerModule(
     "playerPreferencesLite",
-    "Player Preferences Lite v1.29",
+    "Player Preferences Lite v1.30",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -1634,7 +1634,9 @@
           collapseDescriptionBlankRows: true,
           hideStructuredDescription: true,
           hideChat: true,
-          hideInfoCardsAndEndScreens: true,
+          hideInfoCards: true,
+          hideEndScreenRecommendationGrid: true,
+          showAutoplayUpNextCard: true,
           enableTheaterMode: true,
           enableHighestQuality: false,
           highestQualityRetryDelays: [0, 300, 1000, 2500, 5000, 10000],
@@ -3692,14 +3694,32 @@
             `;
         }
 
-        function buildPlayerOverlayCss() {
-          if (!CONFIG.hideInfoCardsAndEndScreens) {
+        function buildInfoCardCss() {
+          if (!CONFIG.hideInfoCards) {
             return "";
           }
 
           return `
               .html5-video-player .ytp-cards-button,
-              .html5-video-player .ytp-paid-content-overlay,
+              .html5-video-player .ytp-paid-content-overlay {
+                display: none !important;
+                opacity: 0 !important;
+                pointer-events: none !important;
+              }
+
+              .html5-video-player .ytp-cards-teaser {
+                opacity: 0 !important;
+                pointer-events: none !important;
+              }
+            `;
+        }
+
+        function buildEndScreenRecommendationCss() {
+          if (!CONFIG.hideEndScreenRecommendationGrid) {
+            return "";
+          }
+
+          return `
               .html5-video-player .ytp-endscreen-content,
               .html5-video-player .ytp-endscreen-previous,
               .html5-video-player .ytp-endscreen-next,
@@ -3712,7 +3732,6 @@
                 pointer-events: none !important;
               }
 
-              .html5-video-player .ytp-cards-teaser,
               .html5-video-player .ytp-ce-element,
               .html5-video-player .ytp-ce-covering-overlay,
               .html5-video-player .ytp-ce-expanding-overlay,
@@ -3731,6 +3750,22 @@
             `;
         }
 
+        function buildAutoplayUpNextCss() {
+          // Keep this separate from recommendation grids: hiding the container while
+          // YouTube leaves Cancel/Play Now visible produces a blank autoplay card.
+          if (CONFIG.showAutoplayUpNextCard) {
+            return "";
+          }
+
+          return `
+              .html5-video-player .ytp-autonav-endscreen-upnext-container {
+                display: none !important;
+                opacity: 0 !important;
+                pointer-events: none !important;
+              }
+            `;
+        }
+
         function buildCss() {
           return [
             buildVolumeOverlayCss(),
@@ -3738,7 +3773,9 @@
             buildFeedCleanupCss(),
             buildWatchCleanupCss(),
             buildWatchLayoutCss(),
-            buildPlayerOverlayCss(),
+            buildInfoCardCss(),
+            buildEndScreenRecommendationCss(),
+            buildAutoplayUpNextCss(),
           ]
             .filter((css) => css.trim())
             .join("\n");
