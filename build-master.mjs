@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MASTER_VERSION = "0.1.6";
+const MASTER_VERSION = "0.1.7";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoriesDirectory = resolve(suiteDirectory, "..");
 const outputPath = join(suiteDirectory, "youtube-master-suite.user.js");

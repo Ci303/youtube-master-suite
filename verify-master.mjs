@@ -118,6 +118,24 @@ assert(
   userscript.includes(".ytp-modern-videowall-still"),
   "The multi-video end-screen recommendation grid must remain hidden",
 );
+for (const queueRequirement of [
+  "showCompactQueueInfo: true",
+  'const QUEUE_INFO_ID = "ytsmp-compact-queue-info"',
+  "function getCompactQueueState()",
+  "function syncCompactQueueInfo()",
+  '.ytp-playlist-menu',
+  '.ytp-queue-menu',
+]) {
+  assert(
+    userscript.includes(queueRequirement),
+    `Missing compact queue requirement: ${queueRequirement}`,
+  );
+}
+assert.match(
+  userscript,
+  /attributeFilter: \["aria-current", "selected"\]/,
+  "Compact queue state must react to current-item attribute changes",
+);
 for (const selector of [
   "ytd-miniplayer",
   "ytd-playlist-panel-renderer",

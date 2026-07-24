@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite (Test)
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.6
+// @version      0.1.7
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -23,7 +23,7 @@
 //   Feed UI Cleaner v2.1 | youtube-feed-ui-cleaner/youtube-feed-ui-cleaner.user.js | commit:18a6c8d6b39da64a941d5cd298cb8603e4265936 | sha256:19af26bb527c54741a2a7460e211f1c5dd2e40a4956adb4fcd52e0fa224ff1dc
 //   Miniplayer Button Restorer v1.2 | youtube-miniplayer-button-restorer/youtube-miniplayer-button-restorer.user.js | commit:d8d7a23da11cf048bc8cff6f6778c73f2e4dee6b | sha256:40587d46d48c35a77c7e629db331f36bb60c1c69c3fc8b8fac8772c378e9e2dd
 //   Player Preferences Lite v1.30 | youtube-player-preferences-lite/youtube-player-preferences-lite.user.js | commit:fa0fb9352e6df6d6301e918a6fac78ce81b1cb0a | sha256:98d494956e6d822dfc1f170a3a410358b15ce90c5db9777db26476a9b5341540
-//   Scroll Miniplayer v5.5 | youtube-scroll-miniplayer/youtube-scroll-miniplayer.user.js | commit:389864d747440aa8f0ccfc85d0875a39b341e228 | sha256:a15fb983cf8dab4a952fb615a363f781a5194314ad990b15f68da9fb6b4d7dc7
+//   Scroll Miniplayer v5.6 | youtube-scroll-miniplayer/youtube-scroll-miniplayer.user.js | commit:34487a287c9d92b84a8c1e6b2c55c9a9b1d91dce | sha256:a41c0f6293ada70d5dacf42e845857d8d0d70c26ab9f99d49aedf5524a9e78cf
 //   Watch Layout Cleaner v1.24 | youtube-watch-layout-cleaner/youtube-watch-layout-cleaner.user.js | commit:0b08b0aac72654da72e133da2fa31eed0b8ea2f2 | sha256:a5dc9044afa9c8aa16c979efbf3eefded17928d994c8d6b16f03ca6a396c4eee
 //   SponsorBlock Queue Width (folded into Watch Layout Cleaner) v1 | sources/youtube-sponsorblock-queue-width.user.js | sha256:f9c299d4a49eb8f8a230903471324c20dd25a5e825f551b7b440c29336bce9c4
 
@@ -4504,7 +4504,7 @@
 
   suite.registerModule(
     "scrollMiniplayer",
-    "Scroll Miniplayer v5.5",
+    "Scroll Miniplayer v5.6",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -4527,6 +4527,7 @@
           mastheadGapPx: 12,
           triggerOffsetPx: 0,
           position: "top-right",
+          showCompactQueueInfo: true,
           enterTransitionMs: 70,
           exitTransitionMs: 0,
         };
@@ -4535,6 +4536,7 @@
         const ACTIVE_CLASS = "ytsmp-scroll-miniplayer-active";
         const EXITING_CLASS = "ytsmp-scroll-miniplayer-exiting";
         const CLOSE_BUTTON_ID = "ytsmp-close-button";
+        const QUEUE_INFO_ID = "ytsmp-compact-queue-info";
         const PLACEHOLDER_ID = "ytsmp-player-placeholder";
         const WATCH_PATHS = ["/watch", "/live/"];
         const WATCH_ROOT_SELECTOR = "ytd-watch-flexy";
@@ -4552,6 +4554,25 @@
         const VIDEO_SELECTOR = "video";
         const MASTHEAD_SELECTOR = "ytd-masthead";
         const NATIVE_MINIPLAYER_SELECTOR = "ytd-miniplayer";
+        const QUEUE_PANEL_SELECTOR = "ytd-playlist-panel-renderer";
+        const QUEUE_ITEM_SELECTOR = [
+          "ytd-playlist-panel-video-renderer",
+          "yt-playlist-panel-video-renderer",
+        ].join(",");
+        const QUEUE_INDEX_SELECTOR = [
+          "#publisher-container #index-message",
+          "#header-description #index-message",
+          "#index-message",
+        ].join(",");
+        const QUEUE_ITEM_TITLE_SELECTOR = [
+          "#video-title",
+          ".yt-core-attributed-string",
+        ].join(",");
+        const WATCH_TITLE_SELECTOR = [
+          "ytd-watch-metadata h1 yt-formatted-string",
+          "ytd-watch-metadata h1 .yt-core-attributed-string",
+          "#title h1 yt-formatted-string",
+        ].join(",");
         const DIRECT_BOX_CLASS = "box";
         const SINGLE_COLUMN_BOX_SELECTOR = `${TRIGGER_ANCHOR_SELECTOR} > .box`;
         const FILLED_COLUMN_BOX_SELECTOR = ".box.ytd-watch-flexy, #columns .box";
@@ -4567,6 +4588,7 @@
 
         let scrollScheduled = false;
         let routeScheduled = false;
+        let queueInfoScheduled = false;
         let fadeOutTimer = 0;
         let suppressedUntilVisible = false;
         let floatedPlayer = null;
@@ -4832,6 +4854,44 @@
             body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CLOSE_BUTTON_ID}:focus-visible {
               opacity: 1 !important;
             }
+
+            #${QUEUE_INFO_ID} {
+              display: none !important;
+            }
+
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${QUEUE_INFO_ID} {
+              align-items: center !important;
+              background: rgba(18, 18, 18, 0.88) !important;
+              border-radius: 6px !important;
+              bottom: 48px !important;
+              box-sizing: border-box !important;
+              color: #fff !important;
+              display: flex !important;
+              font: 500 12px/1.2 Arial, Helvetica, sans-serif !important;
+              gap: 8px !important;
+              left: 12px !important;
+              max-width: calc(100% - 68px) !important;
+              min-height: 30px !important;
+              padding: 6px 9px !important;
+              pointer-events: none !important;
+              position: absolute !important;
+              right: 44px !important;
+              z-index: 70 !important;
+            }
+
+            #${QUEUE_INFO_ID} .ytsmp-queue-position {
+              color: #aaa !important;
+              flex: 0 0 auto !important;
+              font-weight: 700 !important;
+              white-space: nowrap !important;
+            }
+
+            #${QUEUE_INFO_ID} .ytsmp-queue-title {
+              min-width: 0 !important;
+              overflow: hidden !important;
+              text-overflow: ellipsis !important;
+              white-space: nowrap !important;
+            }
           `;
         }
 
@@ -4988,6 +5048,125 @@
           if (button) button.remove();
         }
 
+        function normaliseText(value) {
+          return String(value || "").replace(/\s+/g, " ").trim();
+        }
+
+        function getQueueItemVideoId(item) {
+          const link = item && item.querySelector('a[href*="/watch"]');
+          if (!link) return "";
+
+          try {
+            return new URL(link.href || link.getAttribute("href"), location.origin)
+              .searchParams.get("v") || "";
+          } catch {
+            return "";
+          }
+        }
+
+        function getCompactQueueState() {
+          if (!CONFIG.showCompactQueueInfo) return null;
+
+          const panel = document.querySelector(QUEUE_PANEL_SELECTOR);
+          if (!panel) return null;
+
+          const items = Array.from(panel.querySelectorAll(QUEUE_ITEM_SELECTOR));
+          if (!items.length) return null;
+
+          const currentVideoId = new URL(location.href).searchParams.get("v") || "";
+          let currentItem = items.find((item) =>
+            item.hasAttribute("selected") ||
+            item.getAttribute("aria-current") === "true" ||
+            item.classList.contains("selected") ||
+            Boolean(item.querySelector('[aria-current="true"]'))
+          );
+          if (!currentItem && currentVideoId) {
+            currentItem = items.find(
+              (item) => getQueueItemVideoId(item) === currentVideoId,
+            );
+          }
+
+          const indexText = normaliseText(
+            panel.querySelector(QUEUE_INDEX_SELECTOR)?.textContent,
+          );
+          const indexMatch = indexText.match(/(\d+)\s*\/\s*(\d+)/);
+          let index = currentItem ? items.indexOf(currentItem) + 1 : 0;
+          let total = items.length;
+          if (indexMatch) {
+            index = Number(indexMatch[1]) || index;
+            total = Number(indexMatch[2]) || total;
+          }
+          if (!currentItem && index > 0) {
+            currentItem = items[index - 1] || null;
+          }
+
+          const titleElement =
+            currentItem && currentItem.querySelector(QUEUE_ITEM_TITLE_SELECTOR);
+          const title = normaliseText(
+            titleElement?.getAttribute("title") ||
+            titleElement?.textContent ||
+            document.querySelector(WATCH_TITLE_SELECTOR)?.textContent ||
+            document.title.replace(/\s*-\s*YouTube\s*$/, ""),
+          );
+          if (!title) return null;
+
+          return {
+            position: index > 0 ? `Queue ${index} / ${total}` : `Queue / ${total}`,
+            title,
+          };
+        }
+
+        function removeCompactQueueInfo() {
+          const queueInfo = document.getElementById(QUEUE_INFO_ID);
+          if (queueInfo) queueInfo.remove();
+        }
+
+        function syncCompactQueueInfo() {
+          queueInfoScheduled = false;
+          if (!isBodyActive()) {
+            removeCompactQueueInfo();
+            return;
+          }
+
+          const player = getPlayer();
+          const state = getCompactQueueState();
+          if (!player || !state) {
+            removeCompactQueueInfo();
+            return;
+          }
+
+          let queueInfo = document.getElementById(QUEUE_INFO_ID);
+          if (!queueInfo) {
+            queueInfo = document.createElement("div");
+            queueInfo.id = QUEUE_INFO_ID;
+            queueInfo.setAttribute("role", "status");
+            queueInfo.setAttribute("aria-live", "polite");
+            queueInfo.innerHTML =
+              '<span class="ytsmp-queue-position"></span>' +
+              '<span class="ytsmp-queue-title"></span>';
+          }
+          if (queueInfo.parentElement !== player) {
+            player.appendChild(queueInfo);
+          }
+
+          const position = queueInfo.querySelector(".ytsmp-queue-position");
+          const title = queueInfo.querySelector(".ytsmp-queue-title");
+          if (position.textContent !== state.position) {
+            position.textContent = state.position;
+          }
+          if (title.textContent !== state.title) {
+            title.textContent = state.title;
+            title.title = state.title;
+          }
+        }
+
+        function scheduleCompactQueueInfoSync() {
+          if (queueInfoScheduled) return;
+
+          queueInfoScheduled = true;
+          requestAnimationFrame(syncCompactQueueInfo);
+        }
+
         function dispatchResize() {
           window.dispatchEvent(new Event("resize"));
         }
@@ -5011,6 +5190,7 @@
             setBodyBoxVars();
             body.classList.remove(EXITING_CLASS);
             body.classList.add(ACTIVE_CLASS);
+            scheduleCompactQueueInfoSync();
 
             if (!wasActive) {
               dispatchResize();
@@ -5026,6 +5206,7 @@
               body.classList.remove(EXITING_CLASS);
               clearBodyBoxVars();
               removeCloseButton();
+              removeCompactQueueInfo();
               restorePlayer();
               dispatchResize();
               return;
@@ -5036,6 +5217,7 @@
               body.classList.remove(EXITING_CLASS);
               clearBodyBoxVars();
               removeCloseButton();
+              removeCompactQueueInfo();
               restorePlayer();
               dispatchResize();
             }, CONFIG.exitTransitionMs);
@@ -5046,6 +5228,7 @@
           body.classList.remove(EXITING_CLASS);
           clearBodyBoxVars();
           removeCloseButton();
+          removeCompactQueueInfo();
           restorePlayer();
         }
 
@@ -5058,6 +5241,7 @@
           body.classList.remove(ACTIVE_CLASS, EXITING_CLASS);
           clearBodyBoxVars();
           removeCloseButton();
+          removeCompactQueueInfo();
           restorePlayer();
 
           if (wasFloating) {
@@ -5116,6 +5300,9 @@
           }
 
           ensureStyles();
+          if (isBodyActive()) {
+            scheduleCompactQueueInfoSync();
+          }
           scheduleScrollSync();
         }
 
@@ -5128,6 +5315,28 @@
 
         const mutationObserver = new MutationObserver((mutations) => {
           if (!isEligiblePath()) return;
+
+          if (
+            isBodyActive() &&
+            mutations.some((mutation) => {
+              const target =
+                mutation.target.nodeType === Node.ELEMENT_NODE
+                  ? mutation.target
+                  : mutation.target.parentElement;
+              if (target && target.closest(QUEUE_PANEL_SELECTOR)) return true;
+
+              return Array.from(mutation.addedNodes || []).some((node) => {
+                if (node.nodeType !== Node.ELEMENT_NODE) return false;
+                return (
+                  node.matches(QUEUE_PANEL_SELECTOR) ||
+                  Boolean(node.querySelector(QUEUE_PANEL_SELECTOR))
+                );
+              });
+            })
+          ) {
+            scheduleCompactQueueInfoSync();
+          }
+
           if (getTriggerAnchor()) return;
 
           for (const mutation of mutations) {
@@ -5166,7 +5375,12 @@
         suite.addWindowListener("yt-page-data-updated", scheduleRouteSync, true);
         suite.addWindowListener("pageshow", scheduleRouteSync, true);
 
-        mutationObserver.observe(document.documentElement, { childList: true, subtree: true });
+        mutationObserver.observe(document.documentElement, {
+          attributeFilter: ["aria-current", "selected"],
+          attributes: true,
+          childList: true,
+          subtree: true,
+        });
         syncRouteState();
     },
   );
