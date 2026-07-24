@@ -79,15 +79,26 @@ function getLockedSource(moduleDefinition) {
 
 async function readModuleSource(moduleDefinition) {
   const lockedSource = getLockedSource(moduleDefinition);
+  if (!/^[0-9a-f]{64}$/.test(lockedSource.sha256)) {
+    throw new Error(`${moduleDefinition.id}: invalid locked source hash`);
+  }
+
   if (useLocalSources) {
     const absolutePath = join(repositoriesDirectory, moduleDefinition.source);
+    const source = normaliseNewlines(readFileSync(absolutePath, "utf8"));
+    if (sha256(source) !== lockedSource.sha256) {
+      throw new Error(
+        `${moduleDefinition.id}: local source differs from the source lock; ` +
+          "commit and refresh the source lock before building",
+      );
+    }
     return {
       revision: lockedSource.commit,
-      source: normaliseNewlines(readFileSync(absolutePath, "utf8")),
+      source,
     };
   }
 
-  if (!lockedSource.vendoredPath || !/^[0-9a-f]{64}$/.test(lockedSource.sha256)) {
+  if (!lockedSource.vendoredPath) {
     throw new Error(`${moduleDefinition.id}: incomplete vendored source lock`);
   }
   const vendoredPath = join(suiteDirectory, lockedSource.vendoredPath);

@@ -163,6 +163,8 @@ requires a clean, upstream-synchronised maintainer checkout and a matching
 local `.txt` copy.
 
 Identical locked inputs produce an identical userscript and SHA-256 hash.
+GitHub Actions runs the build check, verifier and syntax checks on every push
+and pull request.
 
 ### Refreshing component sources
 
@@ -179,6 +181,11 @@ node .\verify-master.mjs
 The refresh command refuses dirty, non-`main` or upstream-diverged component
 repositories. This ensures the public master never embeds an unpublished
 working-tree version.
+
+`node .\build-master.mjs --local` is intended only as a provenance check
+against the neighbouring component repositories. It refuses any local source
+whose content differs from its locked SHA-256 hash; commit the component and
+refresh the source lock before rebuilding the master.
 
 ## TampermonkeyFS workflow
 

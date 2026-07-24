@@ -1,0 +1,40 @@
+name: Verify
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify generated master
+        run: node build-master.mjs --check
+
+      - name: Run repository verifier
+        run: node verify-master.mjs
+
+      - name: Check JavaScript syntax
+        run: |
+          node --check build-master.mjs
+          node --check refresh-source-lock.mjs
+          node --check verify-master.mjs
+          node --check youtube-master-suite.user.js
+          for source in sources/modules/*.user.js; do
+            node --check "$source"
+          done
+
+      - name: Confirm verification made no changes
+        run: git diff --exit-code

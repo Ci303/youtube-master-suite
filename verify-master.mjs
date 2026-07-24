@@ -35,6 +35,59 @@ function occurrences(source, value) {
   return source.split(value).length - 1;
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function verifySharedRuntimeContracts(moduleId, source) {
+  for (const unsupportedOption of [
+    "attributeOldValue",
+    "characterDataOldValue",
+  ]) {
+    assert(
+      !source.includes(unsupportedOption),
+      `${moduleId}: shared MutationObserver does not support ${unsupportedOption}`,
+    );
+  }
+
+  const observerNames = [
+    ...source.matchAll(
+      /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*new\s+MutationObserver\s*\(/g,
+    ),
+  ].map((match) => match[1]);
+  for (const observerName of observerNames) {
+    const escapedName = escapeRegExp(observerName);
+    const observeCalls = source.match(
+      new RegExp(`\\b${escapedName}\\.observe\\s*\\(`, "g"),
+    )?.length || 0;
+    assert(
+      observeCalls <= 1,
+      `${moduleId}: shared MutationObserver ${observerName} observes multiple targets`,
+    );
+    assert(
+      !new RegExp(`\\b${escapedName}\\.takeRecords\\s*\\(`).test(source),
+      `${moduleId}: shared MutationObserver ${observerName} uses takeRecords()`,
+    );
+  }
+
+  const sharedWindowEvents = [
+    "pageshow",
+    "yt-navigate-finish",
+    "yt-navigate-start",
+    "yt-page-data-updated",
+  ];
+  for (const eventName of sharedWindowEvents) {
+    const unsupportedListenerOptions = new RegExp(
+      `window\\.addEventListener\\(\\s*["']${escapeRegExp(eventName)}["']` +
+        `[\\s\\S]{0,500}?\\b(?:once|signal)\\s*:`,
+    );
+    assert(
+      !unsupportedListenerOptions.test(source),
+      `${moduleId}: shared ${eventName} listener uses once or signal`,
+    );
+  }
+}
+
 run(process.execPath, ["build-master.mjs", "--check"]);
 run(process.execPath, ["--check", userscriptPath]);
 
@@ -60,6 +113,7 @@ for (const [moduleId, lockedSource] of Object.entries(sourceLock.modules)) {
     join(suiteDirectory, lockedSource.vendoredPath),
     "utf8",
   ).replace(/\r\n/g, "\n");
+  verifySharedRuntimeContracts(moduleId, vendoredSource);
   assert.equal(
     createHash("sha256").update(vendoredSource).digest("hex"),
     lockedSource.sha256,
