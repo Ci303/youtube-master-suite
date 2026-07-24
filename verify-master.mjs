@@ -268,10 +268,25 @@ if (releaseMode) {
       "",
       `${moduleId}: source repository is dirty`,
     );
+    assert.doesNotThrow(
+      () =>
+        git(
+          repositoryPath,
+          "merge-base",
+          "--is-ancestor",
+          lockedSource.commit,
+          "HEAD",
+        ),
+      `${moduleId}: local HEAD does not contain the locked source commit`,
+    );
+    const localSource = readFileSync(
+      join(repositoryPath, lockedSource.path),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
     assert.equal(
-      git(repositoryPath, "rev-parse", "HEAD"),
-      lockedSource.commit,
-      `${moduleId}: local HEAD differs from the source lock`,
+      createHash("sha256").update(localSource).digest("hex"),
+      lockedSource.sha256,
+      `${moduleId}: local userscript content differs from the source lock`,
     );
     assert.equal(
       git(
