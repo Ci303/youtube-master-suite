@@ -95,6 +95,14 @@ assert.match(
   /function hideWatchedVideos\(root = document\) \{\s+if \(isHistoryPath\(\)\) \{[\s\S]+?setCardHidden\(card, "ytpplWatchedHidden", false\);[\s\S]+?return;/,
   "History must clear watched markers and return before filtering",
 );
+assert(
+  !userscript.includes(".ytp-autonav-endscreen-upnext-container"),
+  "The single autoplay up-next card must remain visible",
+);
+assert(
+  userscript.includes(".ytp-modern-videowall-still"),
+  "The multi-video end-screen recommendation grid must remain hidden",
+);
 for (const selector of [
   "ytd-miniplayer",
   "ytd-playlist-panel-renderer",

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Player Preferences Lite
 // @namespace    Citizen.youtube.player-preferences-lite
-// @version      1.28
+// @version      1.29
 // @description  Applies small YouTube player preferences without touching Enhancer-style miniplayer, queue, autoplay, or background playback controls.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-player-preferences-lite
@@ -2112,8 +2112,7 @@
         .html5-video-player .ytp-endscreen-paginate,
         .html5-video-player .ytp-videowall-still,
         .html5-video-player .ytp-modern-videowall-still,
-        .html5-video-player .ytp-fullscreen-grid-stills-container,
-        .html5-video-player .ytp-autonav-endscreen-upnext-container {
+        .html5-video-player .ytp-fullscreen-grid-stills-container {
           display: none !important;
           opacity: 0 !important;
           pointer-events: none !important;

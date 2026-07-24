@@ -24,10 +24,10 @@
     },
     "playerPreferencesLite": {
       "repository": "Ci303/youtube-player-preferences-lite",
-      "commit": "8dfb445c93259e1b5126c3a8d9e2a732a4f9b140",
+      "commit": "bf9d59995c7cc2e225dfc3ac931326a87eebd54f",
       "path": "youtube-player-preferences-lite.user.js",
       "vendoredPath": "sources/modules/youtube-player-preferences-lite.user.js",
-      "sha256": "15d949bc29f40a40693e7f4681b683e7e8e780b5000d22016464582bb8ed4c2d"
+      "sha256": "0b128c1751efce9c23be054229163f06ea47c37a2ee5f85f415f6ad688e2d223"
     },
     "scrollMiniplayer": {
       "repository": "Ci303/youtube-scroll-miniplayer",
