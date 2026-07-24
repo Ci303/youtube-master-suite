@@ -99,6 +99,7 @@ const expectedUrl =
 
 assert.equal(metadata(userscript, "updateURL"), expectedUrl);
 assert.equal(metadata(userscript, "downloadURL"), expectedUrl);
+assert.equal(metadata(userscript, "name"), "YouTube Master Suite");
 assert.match(metadata(userscript, "version"), /^\d+\.\d+\.\d+$/);
 assert.equal(sourceLock.schemaVersion, 1);
 assert.equal(Object.keys(sourceLock.modules || {}).length, 6);

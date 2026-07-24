@@ -196,9 +196,9 @@ checkout:
 <repository checkout>\youtube-master-suite.user.js
 ```
 
-In VS Code, connect TampermonkeyFS to Tampermonkey, open **YouTube Master Suite
-(Test)** from the virtual Tampermonkey folder, select **Link With Local
-File...**, and choose the generated `.user.js` file.
+In VS Code, connect TampermonkeyFS to Tampermonkey, open **YouTube Master
+Suite** from the virtual Tampermonkey folder, select **Link With Local File...**,
+and choose the generated `.user.js` file.
 
 TampermonkeyFS is editor-centred. A permanent change should follow this flow:
 

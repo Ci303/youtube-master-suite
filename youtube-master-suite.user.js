@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         YouTube Master Suite (Test)
+// @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.8
+// @version      0.1.9
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -19,12 +19,12 @@
 // then rebuild; do not edit generated module bodies directly.
 //
 // Source manifest:
-//   Comment Cleaner v1.12 | youtube-comment-cleaner/youtube-comment-cleaner.user.js | commit:a43cbcf1766b8dd5332ab07673f2610fe4cbfdfd | sha256:0420d15b057b8bb64013eb5851d91e2d6a8814ce77fc6cea7b3977e1c759da75
-//   Feed UI Cleaner v2.1 | youtube-feed-ui-cleaner/youtube-feed-ui-cleaner.user.js | commit:18a6c8d6b39da64a941d5cd298cb8603e4265936 | sha256:19af26bb527c54741a2a7460e211f1c5dd2e40a4956adb4fcd52e0fa224ff1dc
-//   Miniplayer Button Restorer v1.2 | youtube-miniplayer-button-restorer/youtube-miniplayer-button-restorer.user.js | commit:d8d7a23da11cf048bc8cff6f6778c73f2e4dee6b | sha256:40587d46d48c35a77c7e629db331f36bb60c1c69c3fc8b8fac8772c378e9e2dd
-//   Player Preferences Lite v1.30 | youtube-player-preferences-lite/youtube-player-preferences-lite.user.js | commit:fa0fb9352e6df6d6301e918a6fac78ce81b1cb0a | sha256:98d494956e6d822dfc1f170a3a410358b15ce90c5db9777db26476a9b5341540
-//   Scroll Miniplayer v5.7 | youtube-scroll-miniplayer/youtube-scroll-miniplayer.user.js | commit:8627100c8f7f833bd5e65ed3df7f761360d8e5ac | sha256:f97088457a6eab644ed66794fb68c91b71e88b081772e37d0e7f06edbc6fd582
-//   Watch Layout Cleaner v1.24 | youtube-watch-layout-cleaner/youtube-watch-layout-cleaner.user.js | commit:0b08b0aac72654da72e133da2fa31eed0b8ea2f2 | sha256:a5dc9044afa9c8aa16c979efbf3eefded17928d994c8d6b16f03ca6a396c4eee
+//   Comment Cleaner v1.12 | youtube-comment-cleaner/youtube-comment-cleaner.user.js | commit:1ff50aaa885b11d11e807798770022b8ac9b2b6d | sha256:0420d15b057b8bb64013eb5851d91e2d6a8814ce77fc6cea7b3977e1c759da75
+//   Feed UI Cleaner v2.1 | youtube-feed-ui-cleaner/youtube-feed-ui-cleaner.user.js | commit:8f7280555bb0b8e691c5a237c34d67a52e01836a | sha256:19af26bb527c54741a2a7460e211f1c5dd2e40a4956adb4fcd52e0fa224ff1dc
+//   Miniplayer Button Restorer v1.2 | youtube-miniplayer-button-restorer/youtube-miniplayer-button-restorer.user.js | commit:b51ecced36f0689f55b9c2d452c8ad1c223e883d | sha256:40587d46d48c35a77c7e629db331f36bb60c1c69c3fc8b8fac8772c378e9e2dd
+//   Player Preferences Lite v1.30 | youtube-player-preferences-lite/youtube-player-preferences-lite.user.js | commit:139414eab08ee646323c3bd44d948cd246c8d89a | sha256:98d494956e6d822dfc1f170a3a410358b15ce90c5db9777db26476a9b5341540
+//   Scroll Miniplayer v5.7 | youtube-scroll-miniplayer/youtube-scroll-miniplayer.user.js | commit:053177e23c54de7acbc7b0ff89b23b57dfefafdf | sha256:f97088457a6eab644ed66794fb68c91b71e88b081772e37d0e7f06edbc6fd582
+//   Watch Layout Cleaner v1.24 | youtube-watch-layout-cleaner/youtube-watch-layout-cleaner.user.js | commit:5d1c6b663eb35c4382acf6a705bab0c4e226f687 | sha256:a5dc9044afa9c8aa16c979efbf3eefded17928d994c8d6b16f03ca6a396c4eee
 //   SponsorBlock Queue Width (folded into Watch Layout Cleaner) v1 | sources/youtube-sponsorblock-queue-width.user.js | sha256:f9c299d4a49eb8f8a230903471324c20dd25a5e825f551b7b440c29336bce9c4
 
 (() => {
