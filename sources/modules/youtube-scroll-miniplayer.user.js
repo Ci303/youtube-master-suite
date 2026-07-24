@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Scroll Miniplayer
 // @namespace    Citizen.youtube.scroll-miniplayer
-// @version      5.6
+// @version      5.7
 // @description  Floats the active YouTube player with compact queue context when the watch/live player scrolls out of view.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-scroll-miniplayer
@@ -59,7 +59,10 @@
   const VIDEO_SELECTOR = "video";
   const MASTHEAD_SELECTOR = "ytd-masthead";
   const NATIVE_MINIPLAYER_SELECTOR = "ytd-miniplayer";
-  const QUEUE_PANEL_SELECTOR = "ytd-playlist-panel-renderer";
+  const QUEUE_PANEL_SELECTOR = [
+    "ytd-playlist-panel-renderer",
+    "yt-playlist-panel-renderer",
+  ].join(",");
   const QUEUE_ITEM_SELECTOR = [
     "ytd-playlist-panel-video-renderer",
     "yt-playlist-panel-video-renderer",
@@ -69,10 +72,8 @@
     "#header-description #index-message",
     "#index-message",
   ].join(",");
-  const QUEUE_ITEM_TITLE_SELECTOR = [
-    "#video-title",
-    ".yt-core-attributed-string",
-  ].join(",");
+  const QUEUE_ITEM_TITLE_SELECTOR = "#video-title";
+  const QUEUE_ITEM_TITLE_FALLBACK_SELECTOR = ".yt-core-attributed-string";
   const WATCH_TITLE_SELECTOR = [
     "ytd-watch-metadata h1 yt-formatted-string",
     "ytd-watch-metadata h1 .yt-core-attributed-string",
@@ -612,7 +613,9 @@
     }
 
     const titleElement =
-      currentItem && currentItem.querySelector(QUEUE_ITEM_TITLE_SELECTOR);
+      currentItem &&
+      (currentItem.querySelector(QUEUE_ITEM_TITLE_SELECTOR) ||
+        currentItem.querySelector(QUEUE_ITEM_TITLE_FALLBACK_SELECTOR));
     const title = normaliseText(
       titleElement?.getAttribute("title") ||
       titleElement?.textContent ||

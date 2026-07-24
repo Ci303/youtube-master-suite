@@ -31,10 +31,10 @@
     },
     "scrollMiniplayer": {
       "repository": "Ci303/youtube-scroll-miniplayer",
-      "commit": "34487a287c9d92b84a8c1e6b2c55c9a9b1d91dce",
+      "commit": "8627100c8f7f833bd5e65ed3df7f761360d8e5ac",
       "path": "youtube-scroll-miniplayer.user.js",
       "vendoredPath": "sources/modules/youtube-scroll-miniplayer.user.js",
-      "sha256": "a41c0f6293ada70d5dacf42e845857d8d0d70c26ab9f99d49aedf5524a9e78cf"
+      "sha256": "f97088457a6eab644ed66794fb68c91b71e88b081772e37d0e7f06edbc6fd582"
     },
     "watchLayoutCleaner": {
       "repository": "Ci303/youtube-watch-layout-cleaner",

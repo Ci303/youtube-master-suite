@@ -190,6 +190,16 @@ assert.match(
   /attributeFilter: \["aria-current", "selected"\]/,
   "Compact queue state must react to current-item attribute changes",
 );
+assert.match(
+  userscript,
+  /const QUEUE_PANEL_SELECTOR = \[\s+"ytd-playlist-panel-renderer",\s+"yt-playlist-panel-renderer",\s+\]\.join\(","\);/,
+  "Compact queue must support both playlist panel host names",
+);
+assert.match(
+  userscript,
+  /currentItem\.querySelector\(QUEUE_ITEM_TITLE_SELECTOR\) \|\|\s+currentItem\.querySelector\(QUEUE_ITEM_TITLE_FALLBACK_SELECTOR\)/,
+  "Compact queue must prefer the explicit video title before its fallback",
+);
 for (const selector of [
   "ytd-miniplayer",
   "ytd-playlist-panel-renderer",
