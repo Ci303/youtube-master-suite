@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MASTER_VERSION = "0.1.10";
+const MASTER_VERSION = "0.1.11";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoriesDirectory = resolve(suiteDirectory, "..");
 const outputPath = join(suiteDirectory, "youtube-master-suite.user.js");
@@ -412,6 +412,7 @@ ${moduleSwitches}
     enabled: false,
     reportIntervalMs: 30000,
   });
+  const DIAGNOSTICS_ATTRIBUTE = "data-yt-master-diagnostics";
 
   const NativeMutationObserver = globalThis.MutationObserver;
   const SHARED_WINDOW_EVENTS = new Set([
@@ -471,14 +472,25 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
   }
 
   function getDiagnosticsSnapshot() {
-    return [...diagnosticStats.values()].map((entry) => ({
-      ...entry,
-      averageMs: entry.calls ? entry.totalMs / entry.calls : 0,
-    }));
+    return [...diagnosticStats.values()]
+      .map((entry) => ({
+        ...entry,
+        averageMs: entry.calls ? entry.totalMs / entry.calls : 0,
+      }))
+      .sort(
+        (left, right) =>
+          right.totalMs - left.totalMs ||
+          left.module.localeCompare(right.module) ||
+          left.operation.localeCompare(right.operation),
+      );
   }
 
   function reportDiagnostics() {
     const snapshot = getDiagnosticsSnapshot();
+    document.documentElement?.setAttribute(
+      DIAGNOSTICS_ATTRIBUTE,
+      JSON.stringify(snapshot),
+    );
     if (snapshot.length) {
       console.table(snapshot);
     }
@@ -489,10 +501,14 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
     if (!DIAGNOSTICS.enabled) return;
 
     globalThis.__YT_MASTER_DIAGNOSTICS__ = Object.freeze({
-      clear: () => diagnosticStats.clear(),
+      clear: () => {
+        diagnosticStats.clear();
+        reportDiagnostics();
+      },
       report: reportDiagnostics,
       snapshot: getDiagnosticsSnapshot,
     });
+    reportDiagnostics();
     setInterval(reportDiagnostics, DIAGNOSTICS.reportIntervalMs);
   }
 

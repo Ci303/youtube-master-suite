@@ -225,6 +225,17 @@ assert(
   userscript.includes("globalThis.__YT_MASTER_DIAGNOSTICS__"),
   "Diagnostics console API is missing",
 );
+assert(
+  userscript.includes(
+    'const DIAGNOSTICS_ATTRIBUTE = "data-yt-master-diagnostics"',
+  ),
+  "Diagnostics DOM bridge is missing",
+);
+assert.match(
+  userscript,
+  /document\.documentElement\?\.setAttribute\(\s+DIAGNOSTICS_ATTRIBUTE,\s+JSON\.stringify\(snapshot\),/,
+  "Diagnostics snapshots must be available outside the userscript sandbox",
+);
 
 if (existsSync(manualCopyPath)) {
   assert.equal(

@@ -104,12 +104,22 @@ const DIAGNOSTICS = Object.freeze({
 When enabled for a temporary investigation, the master records module
 initialisation time, shared lifecycle-event time, mutation callback time and
 the number of mutation records processed. It reports periodically in the
-developer console and exposes:
+developer console, sorted by total execution time, and exposes:
 
 ```javascript
 __YT_MASTER_DIAGNOSTICS__.snapshot()
 __YT_MASTER_DIAGNOSTICS__.report()
 __YT_MASTER_DIAGNOSTICS__.clear()
+```
+
+Firefox may keep that API inside the userscript sandbox. The same snapshot is
+therefore published every 30 seconds as a diagnostic document attribute and
+can be retrieved from the page console with:
+
+```javascript
+JSON.parse(
+  document.documentElement.getAttribute("data-yt-master-diagnostics"),
+)
 ```
 
 Leave diagnostics disabled during normal use.

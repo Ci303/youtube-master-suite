@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.10
+// @version      0.1.11
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -42,6 +42,7 @@
     enabled: false,
     reportIntervalMs: 30000,
   });
+  const DIAGNOSTICS_ATTRIBUTE = "data-yt-master-diagnostics";
 
   const NativeMutationObserver = globalThis.MutationObserver;
   const SHARED_WINDOW_EVENTS = new Set([
@@ -106,14 +107,25 @@
   }
 
   function getDiagnosticsSnapshot() {
-    return [...diagnosticStats.values()].map((entry) => ({
-      ...entry,
-      averageMs: entry.calls ? entry.totalMs / entry.calls : 0,
-    }));
+    return [...diagnosticStats.values()]
+      .map((entry) => ({
+        ...entry,
+        averageMs: entry.calls ? entry.totalMs / entry.calls : 0,
+      }))
+      .sort(
+        (left, right) =>
+          right.totalMs - left.totalMs ||
+          left.module.localeCompare(right.module) ||
+          left.operation.localeCompare(right.operation),
+      );
   }
 
   function reportDiagnostics() {
     const snapshot = getDiagnosticsSnapshot();
+    document.documentElement?.setAttribute(
+      DIAGNOSTICS_ATTRIBUTE,
+      JSON.stringify(snapshot),
+    );
     if (snapshot.length) {
       console.table(snapshot);
     }
@@ -124,10 +136,14 @@
     if (!DIAGNOSTICS.enabled) return;
 
     globalThis.__YT_MASTER_DIAGNOSTICS__ = Object.freeze({
-      clear: () => diagnosticStats.clear(),
+      clear: () => {
+        diagnosticStats.clear();
+        reportDiagnostics();
+      },
       report: reportDiagnostics,
       snapshot: getDiagnosticsSnapshot,
     });
+    reportDiagnostics();
     setInterval(reportDiagnostics, DIAGNOSTICS.reportIntervalMs);
   }
 
