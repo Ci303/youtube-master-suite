@@ -30,7 +30,7 @@ or style element.
 ## Consolidation and performance design
 
 The master is generated from the six canonical module sources in
-`sources/modules/` and the SponsorBlock Queue Width source snapshot. It
+`sources/modules/` and the integrated SponsorBlock Queue Width source. It
 deliberately avoids concatenating six independent userscripts unchanged.
 
 - One native `MutationObserver` dispatches only the mutation records requested
@@ -160,8 +160,8 @@ youtube-master-suite/
 
 ## Building and verification
 
-A normal build uses the committed source lock and vendored snapshots, so a
-clean clone is sufficient:
+A normal build uses the committed source lock and canonical sources contained
+in this repository, so a clean clone is sufficient:
 
 ```powershell
 node .\build-master.mjs
