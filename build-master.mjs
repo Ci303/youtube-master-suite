@@ -3,14 +3,11 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MASTER_VERSION = "0.1.12";
+const MASTER_VERSION = "0.1.13";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const outputPath = join(suiteDirectory, "youtube-master-suite.user.js");
+const releaseManifestPath = join(suiteDirectory, "release-manifest.json");
 const sourceLockPath = join(suiteDirectory, "sources.lock.json");
-const sponsorBlockQueueWidthSourcePath = join(
-  suiteDirectory,
-  "sources/youtube-sponsorblock-queue-width.user.js",
-);
 const checkOnly = process.argv.includes("--check");
 const sourceLock = JSON.parse(readFileSync(sourceLockPath, "utf8"));
 if (sourceLock.schemaVersion !== 2) {
@@ -319,16 +316,6 @@ const sourceModules = await Promise.all(
   }),
 );
 
-const sponsorBlockQueueWidthSource = normaliseNewlines(
-  readFileSync(sponsorBlockQueueWidthSourcePath, "utf8"),
-);
-const sponsorBlockQueueWidthManifest = {
-  label: "SponsorBlock Queue Width (folded into Watch Layout Cleaner)",
-  source: "sources/youtube-sponsorblock-queue-width.user.js",
-  version: extractMetadata(sponsorBlockQueueWidthSource, "version"),
-  sourceHash: sha256(sponsorBlockQueueWidthSource),
-};
-
 const moduleSwitches = sourceModules
   .map(({ id }) => `    ${id}: true,`)
   .join("\n");
@@ -337,9 +324,6 @@ const sourceManifest = sourceModules
   .map(
     ({ label, source, version, sourceHash }) =>
       `//   ${label} v${version} | ${source} | sha256:${sourceHash}`,
-  )
-  .concat(
-    `//   ${sponsorBlockQueueWidthManifest.label} v${sponsorBlockQueueWidthManifest.version} | ${sponsorBlockQueueWidthManifest.source} | sha256:${sponsorBlockQueueWidthManifest.sourceHash}`,
   )
   .join("\n");
 
@@ -389,6 +373,9 @@ ${sourceManifest}
 (() => {
   "use strict";
 
+  const MASTER_VERSION = ${JSON.stringify(MASTER_VERSION)};
+  const EXPECTED_MODULE_COUNT = ${sourceModules.length};
+  const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
 ${moduleSwitches}
   });
@@ -412,6 +399,7 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
   const sharedMutationObservers = new Set();
   const styleParts = new Map();
   const idleModules = [];
+  const registeredModuleIds = new Set();
   const diagnosticStats = new Map();
   let nativeMutationObserver = null;
   let styleElement = null;
@@ -743,6 +731,14 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
   }
 
   function registerModule(id, label, phase, initialise) {
+    if (!Object.hasOwn(ENABLED_MODULES, id)) {
+      throw new Error(\`Unknown module registration: \${id}\`);
+    }
+    if (registeredModuleIds.has(id)) {
+      throw new Error(\`Duplicate module registration: \${id}\`);
+    }
+    registeredModuleIds.add(id);
+
     if (phase === "document-start") {
       executeModule(id, label, initialise);
       return;
@@ -769,6 +765,23 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
     }
   }
 
+  function publishHealthMarker() {
+    const root = document.documentElement;
+    if (!root) return false;
+
+    const registeredModules = registeredModuleIds.size;
+    root.setAttribute(
+      HEALTH_ATTRIBUTE,
+      JSON.stringify({
+        version: MASTER_VERSION,
+        registeredModules,
+        expectedModules: EXPECTED_MODULE_COUNT,
+        healthy: registeredModules === EXPECTED_MODULE_COUNT,
+      }),
+    );
+    return true;
+  }
+
   const suite = {
     SharedMutationObserver,
     addWindowListener,
@@ -780,9 +793,29 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
   installDiagnostics();
 ${moduleInitialisers}
 
+  if (!publishHealthMarker()) {
+    document.addEventListener("readystatechange", publishHealthMarker, {
+      once: true,
+    });
+  }
   startIdleModules();
 })();
 `;
+
+const releaseManifest = `${JSON.stringify(
+  {
+    schemaVersion: 1,
+    name: "YouTube Master Suite",
+    version: MASTER_VERSION,
+    source: "youtube-master-suite.user.js",
+    sha256: sha256(output),
+    bytes: Buffer.byteLength(output, "utf8"),
+    characters: output.length,
+    registeredModules: sourceModules.length,
+  },
+  null,
+  2,
+)}\n`;
 
 if (checkOnly) {
   const existingOutput = readFileSync(outputPath, "utf8");
@@ -791,9 +824,17 @@ if (checkOnly) {
       `${outputPath} is stale; run node build-master.mjs before publishing`,
     );
   }
+  const existingReleaseManifest = readFileSync(releaseManifestPath, "utf8");
+  if (existingReleaseManifest !== releaseManifest) {
+    throw new Error(
+      `${releaseManifestPath} is stale; run node build-master.mjs before publishing`,
+    );
+  }
   console.log(`Verified ${outputPath}`);
 } else {
   writeFileSync(outputPath, output, "utf8");
+  writeFileSync(releaseManifestPath, releaseManifest, "utf8");
   console.log(`Wrote ${outputPath}`);
+  console.log(`Wrote ${releaseManifestPath}`);
 }
 console.log(`SHA-256 ${sha256(output)}`);

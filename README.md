@@ -20,18 +20,17 @@ or install it.
 | Miniplayer Button Restorer | 1.2 | Restores the native-style miniplayer control when YouTube omits it. |
 | Player Preferences Lite | 1.31 | Applies player, feed, description, live-chat, volume, quality, Shorts, and watch-page preferences without taking over YouTube's queue or native miniplayer. Watched-video filtering deliberately excludes Watch History. Info cards, recommendation grids, and the single autoplay up-next card have independent settings. |
 | Scroll Miniplayer | 5.7 | Floats the active watch or live player when it leaves the viewport and shows compact current-title and queue-position context while the full queue remains hidden. |
-| Watch Layout Cleaner | 1.25 | Expands watch-page content, manages the right rail, widens metadata and comments, and provides queue-thumbnail fallbacks. |
-| SponsorBlock Queue Width | 1 | Contributes its fixed `374px` right-rail rules to Watch Layout Cleaner for SponsorBlock notice and queue alignment. |
+| Watch Layout Cleaner | 1.25 | Expands watch-page content, keeps the right rail at the SponsorBlock-friendly `374px` width, widens metadata and comments, and provides queue-thumbnail fallbacks. |
 
-SponsorBlock Queue Width is folded into Watch Layout Cleaner rather than run as
-a seventh module. This retains its required CSS without another event listener
-or style element.
+The former standalone SponsorBlock Queue Width script remains superseded. Its
+required layout rules are owned directly by Watch Layout Cleaner, avoiding a
+redundant source artefact, event listener and style element.
 
 ## Consolidation and performance design
 
 The master is generated from the six canonical module sources in
-`sources/modules/` and the integrated SponsorBlock Queue Width source. It
-deliberately avoids concatenating six independent userscripts unchanged.
+`sources/modules/`. It deliberately avoids concatenating six independent
+userscripts unchanged.
 
 - One native `MutationObserver` dispatches only the mutation records requested
   by each isolated module.
@@ -71,6 +70,20 @@ The userscript metadata points both `@updateURL` and `@downloadURL` at the raw
 
 Publishing a commit without increasing `@version` will not trigger a normal
 Tampermonkey update.
+
+## Runtime health marker
+
+Every successful injection publishes a small JSON health marker on the root
+document element:
+
+```javascript
+JSON.parse(document.documentElement.getAttribute("data-yt-master-suite"))
+```
+
+It reports the loaded master version, registered module count, expected module
+count and whether those counts match. The marker is always enabled and does not
+collect timings or observe additional DOM changes. A missing marker means the
+userscript did not reach its registration-complete stage.
 
 ## Configuration and fault isolation
 
@@ -131,13 +144,14 @@ Leave diagnostics disabled during normal use.
 youtube-master-suite/
 |-- build-master.mjs
 |-- refresh-source-lock.mjs
+|-- verify-installed-master.mjs
 |-- verify-master.mjs
+|-- release-manifest.json
 |-- sources.lock.json
 |-- youtube-master-suite.user.js
 |-- sources/
 |   |-- modules/
 |   |   `-- <six pinned component userscripts>
-|   `-- youtube-sponsorblock-queue-width.user.js
 |-- .gitignore
 `-- README.md
 ```
@@ -145,16 +159,18 @@ youtube-master-suite/
 - `build-master.mjs` is the consolidation logic and build entry point.
 - `sources.lock.json` pins every canonical module to its version and SHA-256
   hash.
+- `release-manifest.json` records the generated version, SHA-256 hash, byte and
+  character lengths, and exact module-registration count.
 - `refresh-source-lock.mjs` refreshes those values from the reviewed canonical
   files in `sources/modules/`.
+- `verify-installed-master.mjs` compares an installed or exported userscript
+  file against the release manifest.
 - `verify-master.mjs` checks reproducibility, syntax, metadata, source locks,
   shared infrastructure, route exclusions, diagnostics defaults and the local
   manual-install copy.
 - `youtube-master-suite.user.js` is the generated, installable artefact.
 - `sources/modules/` contains the definitive, directly maintained source for
   the six feature modules.
-- `sources/youtube-sponsorblock-queue-width.user.js` preserves the standalone
-  source that is folded into Watch Layout Cleaner.
 - `youtube-master-suite.txt` is a local manual-install copy and is deliberately
   ignored because the `.user.js` file is the canonical published artefact.
 
@@ -166,6 +182,7 @@ in this repository, so a clean clone is sufficient:
 ```powershell
 node .\build-master.mjs
 node .\verify-master.mjs
+node .\verify-installed-master.mjs .\youtube-master-suite.user.js
 ```
 
 `node .\build-master.mjs --check` verifies that the generated userscript is
@@ -214,7 +231,14 @@ TampermonkeyFS is editor-centred. A permanent change should follow this flow:
 4. Run `node .\verify-master.mjs`.
 5. Let TampermonkeyFS load the changed linked file into its virtual editor.
 6. Save the virtual editor to send the same source to Tampermonkey.
-7. Verify that the installed and repository sources match before committing.
+7. Read the saved script back from Tampermonkey and verify its hash, length and
+   six module registrations against `release-manifest.json` before committing.
+
+For a file-backed or exported installed copy, run:
+
+```powershell
+node .\verify-installed-master.mjs <installed-source-path>
+```
 
 Direct edits to the generated userscript can be overwritten by the next build.
 
@@ -231,7 +255,8 @@ Before publishing a new version:
    comments, queue changes, the restored miniplayer button, scroll miniplayer,
    fullscreen transitions, live pages, and the `374px` SponsorBlock queue.
 6. Commit and push, then run `node .\verify-master.mjs --release`.
-7. Confirm the installed Tampermonkey source matches the generated file.
+7. Confirm the installed Tampermonkey source matches
+   `release-manifest.json`, including all six module registrations.
 
 ## Compatibility and limitations
 

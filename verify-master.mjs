@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const userscriptPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const manualCopyPath = join(suiteDirectory, "youtube-master-suite.txt");
+const releaseManifestPath = join(suiteDirectory, "release-manifest.json");
 const sourceLockPath = join(suiteDirectory, "sources.lock.json");
 const releaseMode = process.argv.includes("--release");
 
@@ -91,6 +92,9 @@ run(process.execPath, ["build-master.mjs", "--check"]);
 run(process.execPath, ["--check", userscriptPath]);
 
 const userscript = readFileSync(userscriptPath, "utf8");
+const releaseManifest = JSON.parse(
+  readFileSync(releaseManifestPath, "utf8"),
+);
 const sourceLock = JSON.parse(readFileSync(sourceLockPath, "utf8"));
 const expectedUrl =
   "https://raw.githubusercontent.com/Ci303/youtube-master-suite/main/" +
@@ -102,6 +106,11 @@ assert.equal(metadata(userscript, "name"), "YouTube Master Suite");
 assert.match(metadata(userscript, "version"), /^\d+\.\d+\.\d+$/);
 assert.equal(sourceLock.schemaVersion, 2);
 assert.equal(Object.keys(sourceLock.modules || {}).length, 6);
+assert.equal(
+  occurrences(userscript, "suite.registerModule("),
+  6,
+  "The generated master must contain exactly six module registrations",
+);
 
 for (const [moduleId, lockedSource] of Object.entries(sourceLock.modules)) {
   assert.match(
@@ -131,7 +140,40 @@ for (const [moduleId, lockedSource] of Object.entries(sourceLock.modules)) {
     ),
     `${moduleId}: canonical source manifest entry is missing`,
   );
+  assert.match(
+    userscript,
+    new RegExp(
+      `suite\\.registerModule\\(\\s+${JSON.stringify(moduleId).replace(
+        /[.*+?^${}()|[\]\\]/g,
+        "\\$&",
+      )},`,
+    ),
+    `${moduleId}: generated module registration is missing`,
+  );
 }
+
+assert(
+  !existsSync(
+    join(suiteDirectory, "sources/youtube-sponsorblock-queue-width.user.js"),
+  ),
+  "The vestigial SponsorBlock Queue Width source must not be restored",
+);
+assert(
+  !userscript.includes("SponsorBlock Queue Width (folded"),
+  "The generated source manifest must only list canonical modules",
+);
+assert(
+  userscript.includes("sidebarWidthPx: 374"),
+  "Watch Layout Cleaner must retain the SponsorBlock-friendly 374px width",
+);
+assert(
+  userscript.includes("--tm-yw-sidebar-width: ${px(CONFIG.sidebarWidthPx)}"),
+  "The consolidated SponsorBlock queue-width variable is missing",
+);
+assert(
+  userscript.includes("flex: 0 0 ${px(CONFIG.sidebarWidthPx)} !important"),
+  "The consolidated fixed-width right-rail rule is missing",
+);
 
 assert.equal(
   occurrences(userscript, "new NativeMutationObserver("),
@@ -243,6 +285,26 @@ assert.match(
   /document\.documentElement\?\.setAttribute\(\s+DIAGNOSTICS_ATTRIBUTE,\s+JSON\.stringify\(snapshot\),/,
   "Diagnostics snapshots must be available outside the userscript sandbox",
 );
+assert.match(
+  userscript,
+  /const HEALTH_ATTRIBUTE = "data-yt-master-suite";/,
+  "The always-on Master Suite health marker is missing",
+);
+assert.match(
+  userscript,
+  /registeredModules,\s+expectedModules: EXPECTED_MODULE_COUNT,\s+healthy: registeredModules === EXPECTED_MODULE_COUNT,/,
+  "The health marker must report actual and expected module counts",
+);
+
+const userscriptHash = createHash("sha256").update(userscript).digest("hex");
+assert.equal(releaseManifest.schemaVersion, 1);
+assert.equal(releaseManifest.name, "YouTube Master Suite");
+assert.equal(releaseManifest.version, metadata(userscript, "version"));
+assert.equal(releaseManifest.source, "youtube-master-suite.user.js");
+assert.equal(releaseManifest.sha256, userscriptHash);
+assert.equal(releaseManifest.bytes, Buffer.byteLength(userscript, "utf8"));
+assert.equal(releaseManifest.characters, userscript.length);
+assert.equal(releaseManifest.registeredModules, 6);
 
 if (existsSync(manualCopyPath)) {
   assert.equal(
@@ -285,5 +347,5 @@ if (releaseMode) {
 
 console.log(
   `Verified YouTube Master Suite v${metadata(userscript, "version")} ` +
-    `(${createHash("sha256").update(userscript).digest("hex")})`,
+    `(${userscriptHash})`,
 );

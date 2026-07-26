@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.12
+// @version      0.1.13
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -25,11 +25,13 @@
 //   Player Preferences Lite v1.31 | sources/modules/youtube-player-preferences-lite.user.js | sha256:0ab7248947f329da7a869556ea33f1bd3d0507045f40a8971a8f479e3190c666
 //   Scroll Miniplayer v5.7 | sources/modules/youtube-scroll-miniplayer.user.js | sha256:f97088457a6eab644ed66794fb68c91b71e88b081772e37d0e7f06edbc6fd582
 //   Watch Layout Cleaner v1.25 | sources/modules/youtube-watch-layout-cleaner.user.js | sha256:bcf15f6e55f62a3d012de72d28875fd5a6b69686e0bbf269653a392910df9fc8
-//   SponsorBlock Queue Width (folded into Watch Layout Cleaner) v1 | sources/youtube-sponsorblock-queue-width.user.js | sha256:f9c299d4a49eb8f8a230903471324c20dd25a5e825f551b7b440c29336bce9c4
 
 (() => {
   "use strict";
 
+  const MASTER_VERSION = "0.1.13";
+  const EXPECTED_MODULE_COUNT = 6;
+  const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
     commentCleaner: true,
     feedUiCleaner: true,
@@ -63,6 +65,7 @@
   const sharedMutationObservers = new Set();
   const styleParts = new Map();
   const idleModules = [];
+  const registeredModuleIds = new Set();
   const diagnosticStats = new Map();
   let nativeMutationObserver = null;
   let styleElement = null;
@@ -394,6 +397,14 @@
   }
 
   function registerModule(id, label, phase, initialise) {
+    if (!Object.hasOwn(ENABLED_MODULES, id)) {
+      throw new Error(`Unknown module registration: ${id}`);
+    }
+    if (registeredModuleIds.has(id)) {
+      throw new Error(`Duplicate module registration: ${id}`);
+    }
+    registeredModuleIds.add(id);
+
     if (phase === "document-start") {
       executeModule(id, label, initialise);
       return;
@@ -418,6 +429,23 @@
     } else {
       queueMicrotask(start);
     }
+  }
+
+  function publishHealthMarker() {
+    const root = document.documentElement;
+    if (!root) return false;
+
+    const registeredModules = registeredModuleIds.size;
+    root.setAttribute(
+      HEALTH_ATTRIBUTE,
+      JSON.stringify({
+        version: MASTER_VERSION,
+        registeredModules,
+        expectedModules: EXPECTED_MODULE_COUNT,
+        healthy: registeredModules === EXPECTED_MODULE_COUNT,
+      }),
+    );
+    return true;
   }
 
   const suite = {
@@ -5719,5 +5747,10 @@
     },
   );
 
+  if (!publishHealthMarker()) {
+    document.addEventListener("readystatechange", publishHealthMarker, {
+      once: true,
+    });
+  }
   startIdleModules();
 })();

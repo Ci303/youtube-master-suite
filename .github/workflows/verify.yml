@@ -31,10 +31,14 @@ jobs:
       - name: Run repository verifier
         run: node verify-master.mjs
 
+      - name: Verify install-parity helper
+        run: node verify-installed-master.mjs youtube-master-suite.user.js
+
       - name: Check JavaScript syntax
         run: |
           node --check build-master.mjs
           node --check refresh-source-lock.mjs
+          node --check verify-installed-master.mjs
           node --check verify-master.mjs
           node --check youtube-master-suite.user.js
           for source in sources/modules/*.user.js; do
