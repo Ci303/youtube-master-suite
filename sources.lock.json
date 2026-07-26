@@ -1,46 +1,34 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "modules": {
     "commentCleaner": {
-      "repository": "Ci303/youtube-comment-cleaner",
-      "commit": "89c55de4fd032b16afd78ba87cb9f9f9cb01d110",
-      "path": "youtube-comment-cleaner.user.js",
-      "vendoredPath": "sources/modules/youtube-comment-cleaner.user.js",
+      "path": "sources/modules/youtube-comment-cleaner.user.js",
+      "version": "1.12",
       "sha256": "0420d15b057b8bb64013eb5851d91e2d6a8814ce77fc6cea7b3977e1c759da75"
     },
     "feedUiCleaner": {
-      "repository": "Ci303/youtube-feed-ui-cleaner",
-      "commit": "3e08d77c90eec368f2ca7e15c10a79edfcba9c59",
-      "path": "youtube-feed-ui-cleaner.user.js",
-      "vendoredPath": "sources/modules/youtube-feed-ui-cleaner.user.js",
+      "path": "sources/modules/youtube-feed-ui-cleaner.user.js",
+      "version": "2.1",
       "sha256": "19af26bb527c54741a2a7460e211f1c5dd2e40a4956adb4fcd52e0fa224ff1dc"
     },
     "miniplayerButtonRestorer": {
-      "repository": "Ci303/youtube-miniplayer-button-restorer",
-      "commit": "83b2834a49419a74e3272d99adc713b307f773c0",
-      "path": "youtube-miniplayer-button-restorer.user.js",
-      "vendoredPath": "sources/modules/youtube-miniplayer-button-restorer.user.js",
+      "path": "sources/modules/youtube-miniplayer-button-restorer.user.js",
+      "version": "1.2",
       "sha256": "40587d46d48c35a77c7e629db331f36bb60c1c69c3fc8b8fac8772c378e9e2dd"
     },
     "playerPreferencesLite": {
-      "repository": "Ci303/youtube-player-preferences-lite",
-      "commit": "6e7579a1b3cc29dd4fa5e5668d33c20562feeb58",
-      "path": "youtube-player-preferences-lite.user.js",
-      "vendoredPath": "sources/modules/youtube-player-preferences-lite.user.js",
+      "path": "sources/modules/youtube-player-preferences-lite.user.js",
+      "version": "1.31",
       "sha256": "0ab7248947f329da7a869556ea33f1bd3d0507045f40a8971a8f479e3190c666"
     },
     "scrollMiniplayer": {
-      "repository": "Ci303/youtube-scroll-miniplayer",
-      "commit": "bcec8f33fb0f39128ebcf27eaa02a3065616920e",
-      "path": "youtube-scroll-miniplayer.user.js",
-      "vendoredPath": "sources/modules/youtube-scroll-miniplayer.user.js",
+      "path": "sources/modules/youtube-scroll-miniplayer.user.js",
+      "version": "5.7",
       "sha256": "f97088457a6eab644ed66794fb68c91b71e88b081772e37d0e7f06edbc6fd582"
     },
     "watchLayoutCleaner": {
-      "repository": "Ci303/youtube-watch-layout-cleaner",
-      "commit": "a446068fec072f4a80c8844361ac73ed12437339",
-      "path": "youtube-watch-layout-cleaner.user.js",
-      "vendoredPath": "sources/modules/youtube-watch-layout-cleaner.user.js",
+      "path": "sources/modules/youtube-watch-layout-cleaner.user.js",
+      "version": "1.25",
       "sha256": "bcf15f6e55f62a3d012de72d28875fd5a6b69686e0bbf269653a392910df9fc8"
     }
   }

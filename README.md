@@ -7,8 +7,9 @@ otherwise be duplicated across separate scripts.
 
 [Install or update YouTube Master Suite](https://raw.githubusercontent.com/Ci303/youtube-master-suite/main/youtube-master-suite.user.js)
 
-The current release is still labelled **Test** in Tampermonkey while its merged
-behaviour is validated against YouTube's frequently changing interface.
+This repository is the definitive source for the suite. The former standalone
+component repositories are superseded and are not required to build, maintain
+or install it.
 
 ## Included functionality
 
@@ -17,9 +18,9 @@ behaviour is validated against YouTube's frequently changing interface.
 | Comment Cleaner | 1.12 | Hides comment engagement and composer clutter, compacts spacing, and distinguishes uploader and commenter names. |
 | Feed UI Cleaner | 2.1 | Removes unwanted feed shelves, chips, advertisements, mixes, members-only cards, podcasts, and resulting gaps. |
 | Miniplayer Button Restorer | 1.2 | Restores the native-style miniplayer control when YouTube omits it. |
-| Player Preferences Lite | 1.30 | Applies player, feed, description, live-chat, volume, quality, Shorts, and watch-page preferences without taking over YouTube's queue or native miniplayer. Watched-video filtering deliberately excludes Watch History. Info cards, recommendation grids, and the single autoplay up-next card have independent settings. |
-| Scroll Miniplayer | 5.6 | Floats the active watch or live player when it leaves the viewport and shows compact current-title and queue-position context while the full queue remains hidden. |
-| Watch Layout Cleaner | 1.24 | Expands watch-page content, manages the right rail, widens metadata and comments, and provides queue-thumbnail fallbacks. |
+| Player Preferences Lite | 1.31 | Applies player, feed, description, live-chat, volume, quality, Shorts, and watch-page preferences without taking over YouTube's queue or native miniplayer. Watched-video filtering deliberately excludes Watch History. Info cards, recommendation grids, and the single autoplay up-next card have independent settings. |
+| Scroll Miniplayer | 5.7 | Floats the active watch or live player when it leaves the viewport and shows compact current-title and queue-position context while the full queue remains hidden. |
+| Watch Layout Cleaner | 1.25 | Expands watch-page content, manages the right rail, widens metadata and comments, and provides queue-thumbnail fallbacks. |
 | SponsorBlock Queue Width | 1 | Contributes its fixed `374px` right-rail rules to Watch Layout Cleaner for SponsorBlock notice and queue alignment. |
 
 SponsorBlock Queue Width is folded into Watch Layout Cleaner rather than run as
@@ -28,9 +29,9 @@ or style element.
 
 ## Consolidation and performance design
 
-The master is generated from the six sibling source repositories and a local
-snapshot of SponsorBlock Queue Width. It deliberately avoids concatenating six
-independent userscripts unchanged.
+The master is generated from the six canonical module sources in
+`sources/modules/` and the SponsorBlock Queue Width source snapshot. It
+deliberately avoids concatenating six independent userscripts unchanged.
 
 - One native `MutationObserver` dispatches only the mutation records requested
   by each isolated module.
@@ -47,9 +48,9 @@ independent userscripts unchanged.
   debugging without rebuilding the individual scripts.
 
 The source manifest embedded near the top of the generated userscript records
-each input version, exact Git commit and SHA-256 hash. The build fails when a
-vendored source differs from its lock or when a guarded integration point
-changes, preventing an upstream edit from being silently omitted.
+each canonical path, input version and SHA-256 hash. The build fails when a
+module differs from its lock or when a guarded integration point changes,
+preventing an unreviewed source edit from being silently included.
 
 ## Installation
 
@@ -142,16 +143,16 @@ youtube-master-suite/
 ```
 
 - `build-master.mjs` is the consolidation logic and build entry point.
-- `sources.lock.json` pins every component to an exact repository commit and
-  SHA-256 hash.
-- `refresh-source-lock.mjs` verifies the sibling source repositories and
-  refreshes the pinned, vendored source snapshots.
+- `sources.lock.json` pins every canonical module to its version and SHA-256
+  hash.
+- `refresh-source-lock.mjs` refreshes those values from the reviewed canonical
+  files in `sources/modules/`.
 - `verify-master.mjs` checks reproducibility, syntax, metadata, source locks,
   shared infrastructure, route exclusions, diagnostics defaults and the local
   manual-install copy.
 - `youtube-master-suite.user.js` is the generated, installable artefact.
-- `sources/modules/` makes a clean clone reproducible without separately
-  cloning or importing the six component repositories.
+- `sources/modules/` contains the definitive, directly maintained source for
+  the six feature modules.
 - `sources/youtube-sponsorblock-queue-width.user.js` preserves the standalone
   source that is folded into Watch Layout Cleaner.
 - `youtube-master-suite.txt` is a local manual-install copy and is deliberately
@@ -176,10 +177,10 @@ Identical locked inputs produce an identical userscript and SHA-256 hash.
 GitHub Actions runs the build check, verifier and syntax checks on every push
 and pull request.
 
-### Refreshing component sources
+### Editing module sources
 
-Maintainers keep the six component repositories beside this repository. After
-a component change has been committed and pushed:
+Edit the relevant canonical userscript in `sources/modules/`, increase that
+module's metadata version, then refresh the lock and rebuild:
 
 ```powershell
 node .\refresh-source-lock.mjs
@@ -188,14 +189,9 @@ Copy-Item .\youtube-master-suite.user.js .\youtube-master-suite.txt -Force
 node .\verify-master.mjs
 ```
 
-The refresh command refuses dirty, non-`main` or upstream-diverged component
-repositories. This ensures the public master never embeds an unpublished
-working-tree version.
-
-`node .\build-master.mjs --local` is intended only as a provenance check
-against the neighbouring component repositories. It refuses any local source
-whose content differs from its locked SHA-256 hash; commit the component and
-refresh the source lock before rebuilding the master.
+The refresh command only updates module versions and hashes. Review its diff
+before building. A normal build refuses any canonical source whose content or
+version differs from the lock.
 
 ## TampermonkeyFS workflow
 
@@ -212,7 +208,7 @@ and choose the generated `.user.js` file.
 
 TampermonkeyFS is editor-centred. A permanent change should follow this flow:
 
-1. Edit, validate, commit and push the relevant component source.
+1. Edit and validate the relevant source in `sources/modules/`.
 2. Run `node .\refresh-source-lock.mjs`.
 3. Increase the master version and run `node .\build-master.mjs`.
 4. Run `node .\verify-master.mjs`.
@@ -227,7 +223,8 @@ Direct edits to the generated userscript can be overwritten by the next build.
 Before publishing a new version:
 
 1. Increase the master `@version` in `build-master.mjs`.
-2. Refresh and review `sources.lock.json`.
+2. Refresh and review `sources.lock.json` after editing canonical module
+   sources.
 3. Rebuild and run `node .\verify-master.mjs`.
 4. Confirm the route-policy checks cover any new exclusions.
 5. Test YouTube home, History and subscription feeds, watch-page SPA navigation,

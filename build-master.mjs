@@ -1,60 +1,52 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MASTER_VERSION = "0.1.11";
+const MASTER_VERSION = "0.1.12";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
-const repositoriesDirectory = resolve(suiteDirectory, "..");
 const outputPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const sourceLockPath = join(suiteDirectory, "sources.lock.json");
 const sponsorBlockQueueWidthSourcePath = join(
   suiteDirectory,
   "sources/youtube-sponsorblock-queue-width.user.js",
 );
-const useLocalSources = process.argv.includes("--local");
 const checkOnly = process.argv.includes("--check");
 const sourceLock = JSON.parse(readFileSync(sourceLockPath, "utf8"));
+if (sourceLock.schemaVersion !== 2) {
+  throw new Error(`Unsupported source-lock schema ${sourceLock.schemaVersion}`);
+}
 
 const modules = [
   {
     id: "commentCleaner",
     label: "Comment Cleaner",
     phase: "document-idle",
-    source: "youtube-comment-cleaner/youtube-comment-cleaner.user.js",
   },
   {
     id: "feedUiCleaner",
     label: "Feed UI Cleaner",
     phase: "document-idle",
-    source: "youtube-feed-ui-cleaner/youtube-feed-ui-cleaner.user.js",
   },
   {
     id: "miniplayerButtonRestorer",
     label: "Miniplayer Button Restorer",
     phase: "document-idle",
-    source:
-      "youtube-miniplayer-button-restorer/youtube-miniplayer-button-restorer.user.js",
   },
   {
     id: "playerPreferencesLite",
     label: "Player Preferences Lite",
     phase: "document-idle",
-    source:
-      "youtube-player-preferences-lite/youtube-player-preferences-lite.user.js",
   },
   {
     id: "scrollMiniplayer",
     label: "Scroll Miniplayer",
     phase: "document-idle",
-    source: "youtube-scroll-miniplayer/youtube-scroll-miniplayer.user.js",
   },
   {
     id: "watchLayoutCleaner",
     label: "Watch Layout Cleaner",
     phase: "document-start",
-    source:
-      "youtube-watch-layout-cleaner/youtube-watch-layout-cleaner.user.js",
   },
 ];
 
@@ -71,8 +63,8 @@ function getLockedSource(moduleDefinition) {
   if (!lockedSource) {
     throw new Error(`Missing source lock for ${moduleDefinition.id}`);
   }
-  if (!/^[0-9a-f]{40}$/.test(lockedSource.commit)) {
-    throw new Error(`Invalid locked commit for ${moduleDefinition.id}`);
+  if (!/^sources\/modules\/[a-z0-9-]+\.user\.js$/.test(lockedSource.path)) {
+    throw new Error(`Invalid source path for ${moduleDefinition.id}`);
   }
   return lockedSource;
 }
@@ -83,34 +75,23 @@ async function readModuleSource(moduleDefinition) {
     throw new Error(`${moduleDefinition.id}: invalid locked source hash`);
   }
 
-  if (useLocalSources) {
-    const absolutePath = join(repositoriesDirectory, moduleDefinition.source);
-    const source = normaliseNewlines(readFileSync(absolutePath, "utf8"));
-    if (sha256(source) !== lockedSource.sha256) {
-      throw new Error(
-        `${moduleDefinition.id}: local source differs from the source lock; ` +
-          "commit and refresh the source lock before building",
-      );
-    }
-    return {
-      revision: lockedSource.commit,
-      source,
-    };
-  }
-
-  if (!lockedSource.vendoredPath) {
-    throw new Error(`${moduleDefinition.id}: incomplete vendored source lock`);
-  }
-  const vendoredPath = join(suiteDirectory, lockedSource.vendoredPath);
-  const source = normaliseNewlines(readFileSync(vendoredPath, "utf8"));
+  const source = normaliseNewlines(
+    readFileSync(join(suiteDirectory, lockedSource.path), "utf8"),
+  );
   if (sha256(source) !== lockedSource.sha256) {
     throw new Error(
-      `${moduleDefinition.id}: vendored source does not match its locked hash`,
+      `${moduleDefinition.id}: canonical source does not match its locked hash; ` +
+        "run refresh-source-lock.mjs after reviewing the source change",
+    );
+  }
+  if (extractMetadata(source, "version") !== lockedSource.version) {
+    throw new Error(
+      `${moduleDefinition.id}: canonical source version does not match its lock`,
     );
   }
 
   return {
-    revision: lockedSource.commit,
+    sourcePath: lockedSource.path,
     source,
   };
 }
@@ -319,15 +300,18 @@ function transformModuleBody(moduleDefinition, body) {
 
 const sourceModules = await Promise.all(
   modules.map(async (moduleDefinition) => {
-    const { revision, source } = await readModuleSource(moduleDefinition);
+    const { sourcePath, source } = await readModuleSource(moduleDefinition);
+    const canonicalDefinition = {
+      ...moduleDefinition,
+      source: sourcePath,
+    };
     const body = transformModuleBody(
-      moduleDefinition,
-      extractModuleBody(source, moduleDefinition.source),
+      canonicalDefinition,
+      extractModuleBody(source, sourcePath),
     );
 
     return {
-      ...moduleDefinition,
-      revision,
+      ...canonicalDefinition,
       version: extractMetadata(source, "version"),
       sourceHash: sha256(source),
       body,
@@ -351,8 +335,8 @@ const moduleSwitches = sourceModules
 
 const sourceManifest = sourceModules
   .map(
-    ({ label, source, version, sourceHash, revision }) =>
-      `//   ${label} v${version} | ${source} | commit:${revision} | sha256:${sourceHash}`,
+    ({ label, source, version, sourceHash }) =>
+      `//   ${label} v${version} | ${source} | sha256:${sourceHash}`,
   )
   .concat(
     `//   ${sponsorBlockQueueWidthManifest.label} v${sponsorBlockQueueWidthManifest.version} | ${sponsorBlockQueueWidthManifest.source} | sha256:${sponsorBlockQueueWidthManifest.sourceHash}`,
@@ -396,8 +380,8 @@ const output = `// ==UserScript==
 // @noframes
 // ==/UserScript==
 
-// Generated by build-master.mjs. Edit the source scripts or module switches,
-// then rebuild; do not edit generated module bodies directly.
+// Generated by build-master.mjs. Edit canonical sources in sources/modules/
+// or the module switches, then rebuild; do not edit module bodies here.
 //
 // Source manifest:
 ${sourceManifest}

@@ -2,11 +2,10 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
-const repositoriesDirectory = resolve(suiteDirectory, "..");
 const userscriptPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const manualCopyPath = join(suiteDirectory, "youtube-master-suite.txt");
 const sourceLockPath = join(suiteDirectory, "sources.lock.json");
@@ -101,28 +100,36 @@ assert.equal(metadata(userscript, "updateURL"), expectedUrl);
 assert.equal(metadata(userscript, "downloadURL"), expectedUrl);
 assert.equal(metadata(userscript, "name"), "YouTube Master Suite");
 assert.match(metadata(userscript, "version"), /^\d+\.\d+\.\d+$/);
-assert.equal(sourceLock.schemaVersion, 1);
+assert.equal(sourceLock.schemaVersion, 2);
 assert.equal(Object.keys(sourceLock.modules || {}).length, 6);
 
 for (const [moduleId, lockedSource] of Object.entries(sourceLock.modules)) {
-  assert.match(lockedSource.repository, /^Ci303\/youtube-[a-z-]+$/);
-  assert.match(lockedSource.commit, /^[0-9a-f]{40}$/);
-  assert.match(lockedSource.path, /\.user\.js$/);
-  assert.match(lockedSource.vendoredPath, /^sources\/modules\/.+\.user\.js$/);
+  assert.match(
+    lockedSource.path,
+    /^sources\/modules\/[a-z0-9-]+\.user\.js$/,
+  );
+  assert.match(lockedSource.version, /^\d+(?:\.\d+)+$/);
   assert.match(lockedSource.sha256, /^[0-9a-f]{64}$/);
-  const vendoredSource = readFileSync(
-    join(suiteDirectory, lockedSource.vendoredPath),
+  const canonicalSource = readFileSync(
+    join(suiteDirectory, lockedSource.path),
     "utf8",
   ).replace(/\r\n/g, "\n");
-  verifySharedRuntimeContracts(moduleId, vendoredSource);
+  verifySharedRuntimeContracts(moduleId, canonicalSource);
   assert.equal(
-    createHash("sha256").update(vendoredSource).digest("hex"),
+    metadata(canonicalSource, "version"),
+    lockedSource.version,
+    `${moduleId}: canonical source version differs from the source lock`,
+  );
+  assert.equal(
+    createHash("sha256").update(canonicalSource).digest("hex"),
     lockedSource.sha256,
-    `${moduleId}: vendored source differs from the source lock`,
+    `${moduleId}: canonical source differs from the source lock`,
   );
   assert(
-    userscript.includes(`commit:${lockedSource.commit}`),
-    `${moduleId}: locked commit missing from generated manifest`,
+    userscript.includes(
+      `${lockedSource.path} | sha256:${lockedSource.sha256}`,
+    ),
+    `${moduleId}: canonical source manifest entry is missing`,
   );
 }
 
@@ -274,47 +281,6 @@ if (releaseMode) {
     "0\t0",
     "Master repository is not synchronised with upstream",
   );
-
-  for (const [moduleId, lockedSource] of Object.entries(sourceLock.modules)) {
-    const repositoryName = lockedSource.repository.split("/").at(-1);
-    const repositoryPath = join(repositoriesDirectory, repositoryName);
-    assert.equal(
-      git(repositoryPath, "status", "--short"),
-      "",
-      `${moduleId}: source repository is dirty`,
-    );
-    assert.doesNotThrow(
-      () =>
-        git(
-          repositoryPath,
-          "merge-base",
-          "--is-ancestor",
-          lockedSource.commit,
-          "HEAD",
-        ),
-      `${moduleId}: local HEAD does not contain the locked source commit`,
-    );
-    const localSource = readFileSync(
-      join(repositoryPath, lockedSource.path),
-      "utf8",
-    ).replace(/\r\n/g, "\n");
-    assert.equal(
-      createHash("sha256").update(localSource).digest("hex"),
-      lockedSource.sha256,
-      `${moduleId}: local userscript content differs from the source lock`,
-    );
-    assert.equal(
-      git(
-        repositoryPath,
-        "rev-list",
-        "--left-right",
-        "--count",
-        "HEAD...@{upstream}",
-      ),
-      "0\t0",
-      `${moduleId}: source repository is not synchronised with upstream`,
-    );
-  }
 }
 
 console.log(
