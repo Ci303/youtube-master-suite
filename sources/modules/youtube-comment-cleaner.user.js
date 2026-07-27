@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube Comment Cleaner
 // @namespace    Citizen.youtube.comment-cleaner
-// @version      1.12
-// @description  Cleans YouTube comments by hiding engagement controls and composer elements, preserving replies, compacting spacing, and colouring commenter/uploader names.
+// @version      1.13
+// @description  Cleans YouTube comments, prevents stale comments across SPA navigation, preserves replies, compacts spacing, and colours commenter/uploader names.
 // @author       Citizen
 // @license      GNU GPLv3
 // @homepageURL  https://github.com/Ci303/youtube-comment-cleaner
@@ -83,6 +83,9 @@
     ytd-comments a[href^="/@"],
     ytd-comments a[href^="https://www.youtube.com/@"]
   `;
+  const COMMENT_VIDEO_LINK_SELECTOR =
+    'a[href*="/watch?"][href*="lc="], a[href*="youtube.com/watch?"][href*="lc="]';
+  const STALE_COMMENTS_ATTRIBUTE = "data-iow-stale-video";
 
   const COMMENT_MUTATION_SURFACE_SELECTOR = [
     "ytd-comments",
@@ -107,6 +110,7 @@
   let uploaderPathsReadyVideoKey = "";
   let uploaderPathsFallbackTimer = 0;
   let observing = false;
+  let commentsVideoGuardPending = false;
 
   const isWatchPath = () =>
     location.pathname === "/watch" || location.pathname.startsWith("/live/");
@@ -146,6 +150,76 @@
   const getVideoKey = () => {
     const url = new URL(location.href);
     return `${url.pathname}?v=${url.searchParams.get("v") || ""}`;
+  };
+
+  const getCurrentVideoId = () => {
+    const url = new URL(location.href);
+    if (url.pathname === "/watch") {
+      return url.searchParams.get("v") || "";
+    }
+    if (url.pathname.startsWith("/live/")) {
+      return url.pathname.split("/")[2] || "";
+    }
+    return "";
+  };
+
+  const getCommentsVideoId = (comments) => {
+    if (!comments) return "";
+
+    for (const link of comments.querySelectorAll(COMMENT_VIDEO_LINK_SELECTOR)) {
+      try {
+        const videoId = new URL(
+          link.href || link.getAttribute("href"),
+          location.origin,
+        ).searchParams.get("v");
+        if (videoId) return videoId;
+      } catch {}
+    }
+    return "";
+  };
+
+  const getCommentContainers = (root = document) => {
+    const containers = new Set();
+    if (!root || !root.querySelectorAll) return containers;
+
+    if (root.matches?.("ytd-comments")) containers.add(root);
+    root.querySelectorAll("ytd-comments").forEach((comments) =>
+      containers.add(comments),
+    );
+    const closestComments = root.closest?.("ytd-comments");
+    if (closestComments) containers.add(closestComments);
+    return containers;
+  };
+
+  const markCurrentCommentsStale = () => {
+    commentsVideoGuardPending = true;
+    getCommentContainers(document).forEach((comments) =>
+      comments.setAttribute(STALE_COMMENTS_ATTRIBUTE, "1"),
+    );
+  };
+
+  const syncCommentsVideoGuard = (root = document) => {
+    const currentVideoId = getCurrentVideoId();
+    if (!currentVideoId) commentsVideoGuardPending = false;
+
+    getCommentContainers(root).forEach((comments) => {
+      if (!currentVideoId) {
+        comments.removeAttribute(STALE_COMMENTS_ATTRIBUTE);
+        return;
+      }
+
+      const commentsVideoId = getCommentsVideoId(comments);
+      if (!commentsVideoId) {
+        if (commentsVideoGuardPending) {
+          comments.setAttribute(STALE_COMMENTS_ATTRIBUTE, "1");
+        }
+        return;
+      }
+
+      const stale = commentsVideoId !== currentVideoId;
+      comments.toggleAttribute(STALE_COMMENTS_ATTRIBUTE, stale);
+      if (!stale) commentsVideoGuardPending = false;
+    });
   };
 
   const clearUploaderPathsFallback = () => {
@@ -306,6 +380,13 @@ ${selectors.join(",\n")} {
 ytd-comments-header-renderer {
   margin-top:2px !important;
   margin-bottom:2px !important;
+}
+
+/* Keep stale SPA comments out of view without collapsing YouTube's lazy-load area. */
+ytd-comments[${STALE_COMMENTS_ATTRIBUTE}="1"] {
+  visibility:hidden !important;
+  opacity:0 !important;
+  pointer-events:none !important;
 }
 `;
 
@@ -497,11 +578,22 @@ ytd-comment-view-model #header-author-badges {
     if (!isWatchPath()) return;
 
     for (const mutation of mutations) {
+      if (mutation.type === "attributes") {
+        const applyRoot = getCommentMutationApplyRoot(mutation.target);
+        if (applyRoot) syncCommentsVideoGuard(applyRoot);
+        continue;
+      }
+
+      const mutationRoot = getCommentMutationApplyRoot(mutation.target);
+      if (mutationRoot) syncCommentsVideoGuard(mutationRoot);
       if (!mutation.addedNodes.length) continue;
 
       mutation.addedNodes.forEach((node) => {
         const applyRoot = getCommentMutationApplyRoot(node);
-        if (applyRoot) scheduleApply(applyRoot);
+        if (applyRoot) {
+          syncCommentsVideoGuard(applyRoot);
+          scheduleApply(applyRoot);
+        }
 
         if (containsUploaderSource(node)) {
           cachedUploaderPaths = new Set();
@@ -515,6 +607,8 @@ ytd-comment-view-model #header-author-badges {
     if (observing || !isWatchPath()) return;
 
     observer.observe(document.documentElement, {
+      attributeFilter: ["href"],
+      attributes: true,
       childList: true,
       subtree: true,
     });
@@ -544,12 +638,20 @@ ytd-comment-view-model #header-author-badges {
   if (isWatchPath()) markUploaderPathsReady();
   syncRouteState();
 
-  window.addEventListener("yt-navigate-start", invalidateUploaderPaths, true);
+  window.addEventListener(
+    "yt-navigate-start",
+    () => {
+      markCurrentCommentsStale();
+      invalidateUploaderPaths();
+    },
+    true,
+  );
 
   window.addEventListener(
     "yt-navigate-finish",
     () => {
       syncRouteState();
+      syncCommentsVideoGuard();
       scheduleUploaderPathsFallback();
     },
     true,
@@ -561,6 +663,7 @@ ytd-comment-view-model #header-author-badges {
       if (!isWatchPath()) return;
 
       markUploaderPathsReady();
+      syncCommentsVideoGuard();
       scheduleApply(document.querySelector("ytd-comments") || document);
       scheduleDelayedApply();
     },
@@ -576,9 +679,11 @@ ytd-comment-view-model #header-author-badges {
         invalidateUploaderPaths();
       }
       syncRouteState();
+      syncCommentsVideoGuard();
     },
     true,
   );
 
   GM_addStyle(buildCss());
+  syncCommentsVideoGuard();
 })();

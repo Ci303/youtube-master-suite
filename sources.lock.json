@@ -3,8 +3,8 @@
   "modules": {
     "commentCleaner": {
       "path": "sources/modules/youtube-comment-cleaner.user.js",
-      "version": "1.12",
-      "sha256": "0420d15b057b8bb64013eb5851d91e2d6a8814ce77fc6cea7b3977e1c759da75"
+      "version": "1.13",
+      "sha256": "9bc3370083578888b121961285eb6ab280296f4b3f508caabd220473c3addf72"
     },
     "feedUiCleaner": {
       "path": "sources/modules/youtube-feed-ui-cleaner.user.js",

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.13
+// @version      0.1.14
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -19,7 +19,7 @@
 // or the module switches, then rebuild; do not edit module bodies here.
 //
 // Source manifest:
-//   Comment Cleaner v1.12 | sources/modules/youtube-comment-cleaner.user.js | sha256:0420d15b057b8bb64013eb5851d91e2d6a8814ce77fc6cea7b3977e1c759da75
+//   Comment Cleaner v1.13 | sources/modules/youtube-comment-cleaner.user.js | sha256:9bc3370083578888b121961285eb6ab280296f4b3f508caabd220473c3addf72
 //   Feed UI Cleaner v2.1 | sources/modules/youtube-feed-ui-cleaner.user.js | sha256:19af26bb527c54741a2a7460e211f1c5dd2e40a4956adb4fcd52e0fa224ff1dc
 //   Miniplayer Button Restorer v1.2 | sources/modules/youtube-miniplayer-button-restorer.user.js | sha256:40587d46d48c35a77c7e629db331f36bb60c1c69c3fc8b8fac8772c378e9e2dd
 //   Player Preferences Lite v1.31 | sources/modules/youtube-player-preferences-lite.user.js | sha256:0ab7248947f329da7a869556ea33f1bd3d0507045f40a8971a8f479e3190c666
@@ -29,7 +29,7 @@
 (() => {
   "use strict";
 
-  const MASTER_VERSION = "0.1.13";
+  const MASTER_VERSION = "0.1.14";
   const EXPECTED_MODULE_COUNT = 6;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -460,7 +460,7 @@
 
   suite.registerModule(
     "commentCleaner",
-    "Comment Cleaner v1.12",
+    "Comment Cleaner v1.13",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -533,6 +533,9 @@
           ytd-comments a[href^="/@"],
           ytd-comments a[href^="https://www.youtube.com/@"]
         `;
+        const COMMENT_VIDEO_LINK_SELECTOR =
+          'a[href*="/watch?"][href*="lc="], a[href*="youtube.com/watch?"][href*="lc="]';
+        const STALE_COMMENTS_ATTRIBUTE = "data-iow-stale-video";
 
         const COMMENT_MUTATION_SURFACE_SELECTOR = [
           "ytd-comments",
@@ -557,6 +560,7 @@
         let uploaderPathsReadyVideoKey = "";
         let uploaderPathsFallbackTimer = 0;
         let observing = false;
+        let commentsVideoGuardPending = false;
 
         const isWatchPath = () =>
           location.pathname === "/watch" || location.pathname.startsWith("/live/");
@@ -596,6 +600,76 @@
         const getVideoKey = () => {
           const url = new URL(location.href);
           return `${url.pathname}?v=${url.searchParams.get("v") || ""}`;
+        };
+
+        const getCurrentVideoId = () => {
+          const url = new URL(location.href);
+          if (url.pathname === "/watch") {
+            return url.searchParams.get("v") || "";
+          }
+          if (url.pathname.startsWith("/live/")) {
+            return url.pathname.split("/")[2] || "";
+          }
+          return "";
+        };
+
+        const getCommentsVideoId = (comments) => {
+          if (!comments) return "";
+
+          for (const link of comments.querySelectorAll(COMMENT_VIDEO_LINK_SELECTOR)) {
+            try {
+              const videoId = new URL(
+                link.href || link.getAttribute("href"),
+                location.origin,
+              ).searchParams.get("v");
+              if (videoId) return videoId;
+            } catch {}
+          }
+          return "";
+        };
+
+        const getCommentContainers = (root = document) => {
+          const containers = new Set();
+          if (!root || !root.querySelectorAll) return containers;
+
+          if (root.matches?.("ytd-comments")) containers.add(root);
+          root.querySelectorAll("ytd-comments").forEach((comments) =>
+            containers.add(comments),
+          );
+          const closestComments = root.closest?.("ytd-comments");
+          if (closestComments) containers.add(closestComments);
+          return containers;
+        };
+
+        const markCurrentCommentsStale = () => {
+          commentsVideoGuardPending = true;
+          getCommentContainers(document).forEach((comments) =>
+            comments.setAttribute(STALE_COMMENTS_ATTRIBUTE, "1"),
+          );
+        };
+
+        const syncCommentsVideoGuard = (root = document) => {
+          const currentVideoId = getCurrentVideoId();
+          if (!currentVideoId) commentsVideoGuardPending = false;
+
+          getCommentContainers(root).forEach((comments) => {
+            if (!currentVideoId) {
+              comments.removeAttribute(STALE_COMMENTS_ATTRIBUTE);
+              return;
+            }
+
+            const commentsVideoId = getCommentsVideoId(comments);
+            if (!commentsVideoId) {
+              if (commentsVideoGuardPending) {
+                comments.setAttribute(STALE_COMMENTS_ATTRIBUTE, "1");
+              }
+              return;
+            }
+
+            const stale = commentsVideoId !== currentVideoId;
+            comments.toggleAttribute(STALE_COMMENTS_ATTRIBUTE, stale);
+            if (!stale) commentsVideoGuardPending = false;
+          });
         };
 
         const clearUploaderPathsFallback = () => {
@@ -756,6 +830,13 @@
       ytd-comments-header-renderer {
         margin-top:2px !important;
         margin-bottom:2px !important;
+      }
+
+      /* Keep stale SPA comments out of view without collapsing YouTube's lazy-load area. */
+      ytd-comments[${STALE_COMMENTS_ATTRIBUTE}="1"] {
+        visibility:hidden !important;
+        opacity:0 !important;
+        pointer-events:none !important;
       }
       `;
 
@@ -947,11 +1028,22 @@
           if (!isWatchPath()) return;
 
           for (const mutation of mutations) {
+            if (mutation.type === "attributes") {
+              const applyRoot = getCommentMutationApplyRoot(mutation.target);
+              if (applyRoot) syncCommentsVideoGuard(applyRoot);
+              continue;
+            }
+
+            const mutationRoot = getCommentMutationApplyRoot(mutation.target);
+            if (mutationRoot) syncCommentsVideoGuard(mutationRoot);
             if (!mutation.addedNodes.length) continue;
 
             mutation.addedNodes.forEach((node) => {
               const applyRoot = getCommentMutationApplyRoot(node);
-              if (applyRoot) scheduleApply(applyRoot);
+              if (applyRoot) {
+                syncCommentsVideoGuard(applyRoot);
+                scheduleApply(applyRoot);
+              }
 
               if (containsUploaderSource(node)) {
                 cachedUploaderPaths = new Set();
@@ -965,6 +1057,8 @@
           if (observing || !isWatchPath()) return;
 
           observer.observe(document.documentElement, {
+            attributeFilter: ["href"],
+            attributes: true,
             childList: true,
             subtree: true,
           });
@@ -994,12 +1088,20 @@
         if (isWatchPath()) markUploaderPathsReady();
         syncRouteState();
 
-        suite.addWindowListener("yt-navigate-start", invalidateUploaderPaths, true);
+        suite.addWindowListener(
+          "yt-navigate-start",
+          () => {
+            markCurrentCommentsStale();
+            invalidateUploaderPaths();
+          },
+          true,
+        );
 
         suite.addWindowListener(
           "yt-navigate-finish",
           () => {
             syncRouteState();
+            syncCommentsVideoGuard();
             scheduleUploaderPathsFallback();
           },
           true,
@@ -1011,6 +1113,7 @@
             if (!isWatchPath()) return;
 
             markUploaderPathsReady();
+            syncCommentsVideoGuard();
             scheduleApply(document.querySelector("ytd-comments") || document);
             scheduleDelayedApply();
           },
@@ -1026,11 +1129,13 @@
               invalidateUploaderPaths();
             }
             syncRouteState();
+            syncCommentsVideoGuard();
           },
           true,
         );
 
         GM_addStyle(buildCss());
+        syncCommentsVideoGuard();
     },
   );
 

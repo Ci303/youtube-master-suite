@@ -194,6 +194,23 @@ assert(
   userscript.includes('[data-ytppl-watched-hidden="1"]'),
   "History stale-marker cleanup is missing",
 );
+for (const staleCommentRequirement of [
+  'const STALE_COMMENTS_ATTRIBUTE = "data-iow-stale-video"',
+  'a[href*="/watch?"][href*="lc="]',
+  "commentsVideoId !== currentVideoId",
+  "markCurrentCommentsStale();",
+  'attributeFilter: ["href"]',
+]) {
+  assert(
+    userscript.includes(staleCommentRequirement),
+    `Missing stale-comment guard requirement: ${staleCommentRequirement}`,
+  );
+}
+assert.match(
+  userscript,
+  /ytd-comments\[\$\{STALE_COMMENTS_ATTRIBUTE\}="1"\]\s*\{[\s\S]+?visibility:hidden !important;[\s\S]+?opacity:0 !important;[\s\S]+?pointer-events:none !important;/,
+  "Stale comments must be hidden without collapsing the lazy-load area",
+);
 assert.match(
   userscript,
   /function hideWatchedVideos\(root = document\) \{\s+if \(isHistoryPath\(\)\) \{[\s\S]+?setCardHidden\(card, "ytpplWatchedHidden", false\);[\s\S]+?return;/,

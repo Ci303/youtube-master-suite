@@ -15,7 +15,7 @@ or install it.
 
 | Module | Source version | Purpose |
 | --- | ---: | --- |
-| Comment Cleaner | 1.12 | Hides comment engagement and composer clutter, compacts spacing, and distinguishes uploader and commenter names. |
+| Comment Cleaner | 1.13 | Hides comment engagement and composer clutter, prevents stale comments from appearing after queue navigation, compacts spacing, and distinguishes uploader and commenter names. |
 | Feed UI Cleaner | 2.1 | Removes unwanted feed shelves, chips, advertisements, mixes, members-only cards, podcasts, and resulting gaps. |
 | Miniplayer Button Restorer | 1.2 | Restores the native-style miniplayer control when YouTube omits it. |
 | Player Preferences Lite | 1.31 | Applies player, feed, description, live-chat, volume, quality, Shorts, and watch-page preferences without taking over YouTube's queue or native miniplayer. Watched-video filtering deliberately excludes Watch History. Info cards, recommendation grids, and the single autoplay up-next card have independent settings. |
@@ -252,8 +252,9 @@ Before publishing a new version:
 3. Rebuild and run `node .\verify-master.mjs`.
 4. Confirm the route-policy checks cover any new exclusions.
 5. Test YouTube home, History and subscription feeds, watch-page SPA navigation,
-   comments, queue changes, the restored miniplayer button, scroll miniplayer,
-   fullscreen transitions, live pages, and the `374px` SponsorBlock queue.
+   comment/video-ID parity during queue changes, the restored miniplayer button,
+   scroll miniplayer, fullscreen transitions, live pages, and the `374px`
+   SponsorBlock queue.
 6. Commit and push, then run `node .\verify-master.mjs --release`.
 7. Confirm the installed Tampermonkey source matches
    `release-manifest.json`, including all six module registrations.
