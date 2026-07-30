@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.14
+// @version      0.1.15
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -20,7 +20,7 @@
 //
 // Source manifest:
 //   Comment Cleaner v1.13 | sources/modules/youtube-comment-cleaner.user.js | sha256:9bc3370083578888b121961285eb6ab280296f4b3f508caabd220473c3addf72
-//   Feed UI Cleaner v2.1 | sources/modules/youtube-feed-ui-cleaner.user.js | sha256:19af26bb527c54741a2a7460e211f1c5dd2e40a4956adb4fcd52e0fa224ff1dc
+//   Feed UI Cleaner v2.2 | sources/modules/youtube-feed-ui-cleaner.user.js | sha256:f82e24f78cee5a39a58139a186b4fbd42ffd484e292e4403659c8e37601d73c5
 //   Miniplayer Button Restorer v1.2 | sources/modules/youtube-miniplayer-button-restorer.user.js | sha256:40587d46d48c35a77c7e629db331f36bb60c1c69c3fc8b8fac8772c378e9e2dd
 //   Player Preferences Lite v1.31 | sources/modules/youtube-player-preferences-lite.user.js | sha256:0ab7248947f329da7a869556ea33f1bd3d0507045f40a8971a8f479e3190c666
 //   Scroll Miniplayer v5.7 | sources/modules/youtube-scroll-miniplayer.user.js | sha256:f97088457a6eab644ed66794fb68c91b71e88b081772e37d0e7f06edbc6fd582
@@ -29,7 +29,7 @@
 (() => {
   "use strict";
 
-  const MASTER_VERSION = "0.1.14";
+  const MASTER_VERSION = "0.1.15";
   const EXPECTED_MODULE_COUNT = 6;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -1141,7 +1141,7 @@
 
   suite.registerModule(
     "feedUiCleaner",
-    "Feed UI Cleaner v2.1",
+    "Feed UI Cleaner v2.2",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -1174,6 +1174,7 @@
           'ytd-browse ytd-feed-filter-chip-bar-renderer #chips-wrapper.ytd-feed-filter-chip-bar-renderer',
           'ytd-browse ytd-rich-grid-renderer ytd-rich-section-renderer',
           'ytd-browse ytd-rich-grid-renderer ytd-rich-item-renderer:has(ytd-feed-nudge-renderer)',
+          'ytd-masthead #center',
           'ytd-masthead #voice-search-button',
           'ytd-masthead ytd-notification-topbar-button-renderer',
           'ytd-masthead #notification-button',

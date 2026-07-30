@@ -167,6 +167,10 @@ assert(
   "Watch Layout Cleaner must retain the SponsorBlock-friendly 374px width",
 );
 assert(
+  userscript.includes("'ytd-masthead #center'"),
+  "Feed UI Cleaner must hide the masthead search area",
+);
+assert(
   userscript.includes("--tm-yw-sidebar-width: ${px(CONFIG.sidebarWidthPx)}"),
   "The consolidated SponsorBlock queue-width variable is missing",
 );

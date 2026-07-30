@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Feed UI Cleaner
 // @namespace    Citizen.youtube.feed-ui-cleaner
-// @version      2.1
+// @version      2.2
 // @description  Removes unwanted YouTube UI, shelves, chips, ad slots, mixes, members-only videos, and full podcast tiles while reducing blank feed gaps.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-feed-ui-cleaner
@@ -42,6 +42,7 @@
     'ytd-browse ytd-feed-filter-chip-bar-renderer #chips-wrapper.ytd-feed-filter-chip-bar-renderer',
     'ytd-browse ytd-rich-grid-renderer ytd-rich-section-renderer',
     'ytd-browse ytd-rich-grid-renderer ytd-rich-item-renderer:has(ytd-feed-nudge-renderer)',
+    'ytd-masthead #center',
     'ytd-masthead #voice-search-button',
     'ytd-masthead ytd-notification-topbar-button-renderer',
     'ytd-masthead #notification-button',
