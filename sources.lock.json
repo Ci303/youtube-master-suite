@@ -8,8 +8,8 @@
     },
     "feedUiCleaner": {
       "path": "sources/modules/youtube-feed-ui-cleaner.user.js",
-      "version": "2.2",
-      "sha256": "f82e24f78cee5a39a58139a186b4fbd42ffd484e292e4403659c8e37601d73c5"
+      "version": "2.3",
+      "sha256": "7e3d357af994e20ce61fdd717732403f1d1fba9273f109ea17d7c82608b21b69"
     },
     "miniplayerButtonRestorer": {
       "path": "sources/modules/youtube-miniplayer-button-restorer.user.js",
