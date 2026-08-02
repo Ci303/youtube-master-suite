@@ -18,7 +18,7 @@ or install it.
 | Comment Cleaner | 1.13 | Hides comment engagement and composer clutter, prevents stale comments from appearing after queue navigation, compacts spacing, and distinguishes uploader and commenter names. |
 | Feed UI Cleaner | 2.3 | Removes unwanted feed shelves, chips, advertisements, mixes, members-only cards, podcasts, and resulting gaps while preserving YouTube search. |
 | Miniplayer Button Restorer | 1.2 | Restores the native-style miniplayer control when YouTube omits it. |
-| Player Preferences Lite | 1.31 | Applies player, feed, description, live-chat, volume, quality, Shorts, and watch-page preferences without taking over YouTube's queue or native miniplayer. Watched-video filtering deliberately excludes Watch History. Info cards, recommendation grids, and the single autoplay up-next card have independent settings. |
+| Player Preferences Lite | 1.32 | Applies player, feed, description, live-chat, volume, quality, Shorts, and watch-page preferences without taking over YouTube's queue or native miniplayer. Keeps native like and Return YouTube Dislike counts vertically aligned. Watched-video filtering deliberately excludes Watch History. Info cards, recommendation grids, and the single autoplay up-next card have independent settings. |
 | Scroll Miniplayer | 5.7 | Floats the active watch or live player when it leaves the viewport and shows compact current-title and queue-position context while the full queue remains hidden. |
 | Watch Layout Cleaner | 1.25 | Expands watch-page content, keeps the right rail at the SponsorBlock-friendly `374px` width, widens metadata and comments, and provides queue-thumbnail fallbacks. |
 

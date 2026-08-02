@@ -170,6 +170,17 @@ assert(
   !userscript.includes("'ytd-masthead #center'"),
   "Feed UI Cleaner must preserve the masthead search area",
 );
+for (const countAlignmentRequirement of [
+  ":is(#segmented-like-button, #segmented-dislike-button)",
+  "align-self: center !important;",
+  "line-height: 24px !important;",
+  "vertical-align: middle !important;",
+]) {
+  assert(
+    userscript.includes(countAlignmentRequirement),
+    `Missing like/dislike count alignment requirement: ${countAlignmentRequirement}`,
+  );
+}
 assert(
   userscript.includes("--tm-yw-sidebar-width: ${px(CONFIG.sidebarWidthPx)}"),
   "The consolidated SponsorBlock queue-width variable is missing",
