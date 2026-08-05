@@ -34,7 +34,7 @@ assert.equal(
 assert.match(manifest.sha256, /^[0-9a-f]{64}$/, "Invalid manifest hash");
 assert.equal(
   manifest.registeredModules,
-  6,
+  7,
   "Unexpected manifest module count",
 );
 assert.equal(

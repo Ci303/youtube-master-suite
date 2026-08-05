@@ -13,8 +13,13 @@
     },
     "miniplayerButtonRestorer": {
       "path": "sources/modules/youtube-miniplayer-button-restorer.user.js",
-      "version": "1.2",
-      "sha256": "40587d46d48c35a77c7e629db331f36bb60c1c69c3fc8b8fac8772c378e9e2dd"
+      "version": "1.3",
+      "sha256": "fb9ed1668ea8c4e06c45e713800c17a10dd67e5e2e106d46f609b6e6d5cd5de1"
+    },
+    "pageCoherence": {
+      "path": "sources/modules/youtube-page-coherence.user.js",
+      "version": "1.0",
+      "sha256": "6345c396147a8c70400c6a9f9d323c75d443e5a0bb995a10f4fbd84b7571eb2c"
     },
     "playerPreferencesLite": {
       "path": "sources/modules/youtube-player-preferences-lite.user.js",

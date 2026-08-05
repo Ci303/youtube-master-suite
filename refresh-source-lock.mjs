@@ -22,8 +22,8 @@ if (sourceLock.schemaVersion !== 2) {
 }
 
 const modules = Object.entries(sourceLock.modules || {});
-if (modules.length !== 6) {
-  throw new Error(`Expected 6 canonical modules, found ${modules.length}`);
+if (modules.length !== 7) {
+  throw new Error(`Expected 7 canonical modules, found ${modules.length}`);
 }
 
 const sourcePaths = new Set();

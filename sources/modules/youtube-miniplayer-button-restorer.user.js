@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Miniplayer Button Restorer
 // @namespace    Citizen.youtube.miniplayer-button-restorer
-// @version      1.2
+// @version      1.3
 // @description  Restores a Miniplayer button to YouTube watch and live player controls, falling back to the native miniplayer shortcut when needed.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-miniplayer-button-restorer
@@ -211,6 +211,14 @@
     if (btn) btn.remove();
   }
 
+  function isButtonInstalled() {
+    const button = document.getElementById(BTN_ID);
+    if (!button?.isConnected) return false;
+
+    const controls = getRightControls();
+    return Boolean(controls && button.parentElement === controls);
+  }
+
   function installOnce() {
     if (!isEligiblePath()) {
       removeButton();
@@ -302,6 +310,8 @@
   }
 
   const mo = new MutationObserver((muts) => {
+    if (isButtonInstalled()) return;
+
     for (const m of muts) {
       if (m.addedNodes && m.addedNodes.length) {
         debounceInstall(150);

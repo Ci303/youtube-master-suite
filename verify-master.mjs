@@ -105,11 +105,11 @@ assert.equal(metadata(userscript, "downloadURL"), expectedUrl);
 assert.equal(metadata(userscript, "name"), "YouTube Master Suite");
 assert.match(metadata(userscript, "version"), /^\d+\.\d+\.\d+$/);
 assert.equal(sourceLock.schemaVersion, 2);
-assert.equal(Object.keys(sourceLock.modules || {}).length, 6);
+assert.equal(Object.keys(sourceLock.modules || {}).length, 7);
 assert.equal(
   occurrences(userscript, "suite.registerModule("),
-  6,
-  "The generated master must contain exactly six module registrations",
+  7,
+  "The generated master must contain exactly seven module registrations",
 );
 
 for (const [moduleId, lockedSource] of Object.entries(sourceLock.modules)) {
@@ -169,6 +169,11 @@ assert(
 assert(
   !userscript.includes("'ytd-masthead #center'"),
   "Feed UI Cleaner must preserve the masthead search area",
+);
+assert.match(
+  userscript,
+  /const mo = new MutationObserver\(\(muts\) => \{\s+if \(isButtonInstalled\(\)\) return;/,
+  "Miniplayer Button Restorer must skip redundant mutation work once installed",
 );
 for (const countAlignmentRequirement of [
   ":is(#segmented-like-button, #segmented-dislike-button)",
@@ -327,6 +332,27 @@ assert.match(
   /registeredModules,\s+expectedModules: EXPECTED_MODULE_COUNT,\s+healthy: registeredModules === EXPECTED_MODULE_COUNT,/,
   "The health marker must report actual and expected module counts",
 );
+for (const coherenceRequirement of [
+  'const STALE_ATTRIBUTE = "data-yt-master-page-stale"',
+  'const STATE_ATTRIBUTE = "data-yt-master-state"',
+  'const EVENTS_ATTRIBUTE = "data-yt-master-events"',
+  "urlVideoId === playerVideoId",
+  "flexyVideoId !== playerVideoId",
+  "mismatchesBeforeWarning: 2",
+  'button.textContent = "Reload page data"',
+  "button.addEventListener(\"click\", () => location.reload())",
+  "globalThis.__YT_MASTER_STATE__",
+]) {
+  assert(
+    userscript.includes(coherenceRequirement),
+    `Missing page-coherence requirement: ${coherenceRequirement}`,
+  );
+}
+assert.match(
+  userscript,
+  /:root\[\$\{STALE_ATTRIBUTE\}\] ytd-watch-metadata,[\s\S]+?:root\[\$\{STALE_ATTRIBUTE\}\] ytd-comments/,
+  "Confirmed stale metadata and comments must remain hidden",
+);
 
 const userscriptHash = createHash("sha256").update(userscript).digest("hex");
 assert.equal(releaseManifest.schemaVersion, 1);
@@ -336,7 +362,7 @@ assert.equal(releaseManifest.source, "youtube-master-suite.user.js");
 assert.equal(releaseManifest.sha256, userscriptHash);
 assert.equal(releaseManifest.bytes, Buffer.byteLength(userscript, "utf8"));
 assert.equal(releaseManifest.characters, userscript.length);
-assert.equal(releaseManifest.registeredModules, 6);
+assert.equal(releaseManifest.registeredModules, 7);
 
 if (existsSync(manualCopyPath)) {
   assert.equal(

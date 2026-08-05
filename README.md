@@ -17,7 +17,8 @@ or install it.
 | --- | ---: | --- |
 | Comment Cleaner | 1.13 | Hides comment engagement and composer clutter, prevents stale comments from appearing after queue navigation, compacts spacing, and distinguishes uploader and commenter names. |
 | Feed UI Cleaner | 2.3 | Removes unwanted feed shelves, chips, advertisements, mixes, members-only cards, podcasts, and resulting gaps while preserving YouTube search. |
-| Miniplayer Button Restorer | 1.2 | Restores the native-style miniplayer control when YouTube omits it. |
+| Miniplayer Button Restorer | 1.3 | Restores the native-style miniplayer control when YouTube omits it, while avoiding redundant installation work once attached. |
+| Page Coherence Guard | 1.0 | Detects incomplete queue navigation, hides confirmed stale metadata and comments, offers an explicit page-data reload, and publishes lightweight navigation-state diagnostics. |
 | Player Preferences Lite | 1.32 | Applies player, feed, description, live-chat, volume, quality, Shorts, and watch-page preferences without taking over YouTube's queue or native miniplayer. Keeps native like and Return YouTube Dislike counts vertically aligned. Watched-video filtering deliberately excludes Watch History. Info cards, recommendation grids, and the single autoplay up-next card have independent settings. |
 | Scroll Miniplayer | 5.7 | Floats the active watch or live player when it leaves the viewport and shows compact current-title and queue-position context while the full queue remains hidden. |
 | Watch Layout Cleaner | 1.25 | Expands watch-page content, keeps the right rail at the SponsorBlock-friendly `374px` width, widens metadata and comments, and provides queue-thumbnail fallbacks. |
@@ -28,8 +29,8 @@ redundant source artefact, event listener and style element.
 
 ## Consolidation and performance design
 
-The master is generated from the six canonical module sources in
-`sources/modules/`. It deliberately avoids concatenating six independent
+The master is generated from the seven canonical module sources in
+`sources/modules/`. It deliberately avoids concatenating independent
 userscripts unchanged.
 
 - One native `MutationObserver` dispatches only the mutation records requested
@@ -94,6 +95,7 @@ const ENABLED_MODULES = Object.freeze({
   commentCleaner: true,
   feedUiCleaner: true,
   miniplayerButtonRestorer: true,
+  pageCoherence: true,
   playerPreferencesLite: true,
   scrollMiniplayer: true,
   watchLayoutCleaner: true,
@@ -138,6 +140,30 @@ JSON.parse(
 
 Leave diagnostics disabled during normal use.
 
+### Lightweight navigation state
+
+The Page Coherence Guard always publishes a small current-state snapshot and a
+bounded history of the last 20 navigation events. It performs no continuous
+polling and collects no performance timings:
+
+```javascript
+JSON.parse(document.documentElement.getAttribute("data-yt-master-state"))
+JSON.parse(document.documentElement.getAttribute("data-yt-master-events"))
+```
+
+When accessible from the page console, the equivalent API is:
+
+```javascript
+__YT_MASTER_STATE__.snapshot()
+__YT_MASTER_STATE__.events()
+__YT_MASTER_STATE__.check()
+```
+
+After two persistent checks confirm that the URL and player have advanced but
+`ytd-watch-flexy` still belongs to the previous video, stale metadata and
+comments are hidden. The suite displays an explicit reload control; it never
+reloads automatically because that could discard a temporary queue.
+
 ## Repository layout
 
 ```text
@@ -151,7 +177,7 @@ youtube-master-suite/
 |-- youtube-master-suite.user.js
 |-- sources/
 |   |-- modules/
-|   |   `-- <six pinned component userscripts>
+|   |   `-- <seven pinned component userscripts>
 |-- .gitignore
 `-- README.md
 ```
@@ -170,7 +196,7 @@ youtube-master-suite/
   manual-install copy.
 - `youtube-master-suite.user.js` is the generated, installable artefact.
 - `sources/modules/` contains the definitive, directly maintained source for
-  the six feature modules.
+  the seven feature modules.
 - `youtube-master-suite.txt` is a local manual-install copy and is deliberately
   ignored because the `.user.js` file is the canonical published artefact.
 
@@ -232,7 +258,7 @@ TampermonkeyFS is editor-centred. A permanent change should follow this flow:
 5. Let TampermonkeyFS load the changed linked file into its virtual editor.
 6. Save the virtual editor to send the same source to Tampermonkey.
 7. Read the saved script back from Tampermonkey and verify its hash, length and
-   six module registrations against `release-manifest.json` before committing.
+   seven module registrations against `release-manifest.json` before committing.
 
 For a file-backed or exported installed copy, run:
 
@@ -257,7 +283,7 @@ Before publishing a new version:
    SponsorBlock queue.
 6. Commit and push, then run `node .\verify-master.mjs --release`.
 7. Confirm the installed Tampermonkey source matches
-   `release-manifest.json`, including all six module registrations.
+   `release-manifest.json`, including all seven module registrations.
 
 ## Compatibility and limitations
 
