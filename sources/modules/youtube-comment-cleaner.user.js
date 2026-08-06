@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Comment Cleaner
 // @namespace    Citizen.youtube.comment-cleaner
-// @version      1.13
+// @version      1.14
 // @description  Cleans YouTube comments, prevents stale comments across SPA navigation, preserves replies, compacts spacing, and colours commenter/uploader names.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -229,10 +229,14 @@
     uploaderPathsFallbackTimer = 0;
   };
 
-  const invalidateUploaderPaths = () => {
-    clearUploaderPathsFallback();
+  const invalidateCachedUploaderPaths = () => {
     lastVideoKey = "";
     cachedUploaderPaths = new Set();
+  };
+
+  const invalidateUploaderPaths = () => {
+    clearUploaderPathsFallback();
+    invalidateCachedUploaderPaths();
     uploaderPathsReadyVideoKey = "";
   };
 
@@ -574,33 +578,55 @@ ytd-comment-view-model #header-author-badges {
     );
   };
 
+  const collectCommentsVideoGuardRoots = (roots, node) => {
+    const applyRoot = getCommentMutationApplyRoot(node);
+    if (!applyRoot) return null;
+
+    getCommentContainers(applyRoot).forEach((comments) => roots.add(comments));
+    return applyRoot;
+  };
+
   const observer = new MutationObserver((mutations) => {
     if (!isWatchPath()) return;
 
+    const commentsVideoGuardRoots = new Set();
+
     for (const mutation of mutations) {
       if (mutation.type === "attributes") {
-        const applyRoot = getCommentMutationApplyRoot(mutation.target);
-        if (applyRoot) syncCommentsVideoGuard(applyRoot);
+        collectCommentsVideoGuardRoots(
+          commentsVideoGuardRoots,
+          mutation.target,
+        );
+
+        if (containsUploaderSource(mutation.target)) {
+          invalidateCachedUploaderPaths();
+          scheduleApply(document.querySelector("ytd-comments") || document);
+        }
         continue;
       }
 
-      const mutationRoot = getCommentMutationApplyRoot(mutation.target);
-      if (mutationRoot) syncCommentsVideoGuard(mutationRoot);
+      collectCommentsVideoGuardRoots(commentsVideoGuardRoots, mutation.target);
       if (!mutation.addedNodes.length) continue;
 
       mutation.addedNodes.forEach((node) => {
-        const applyRoot = getCommentMutationApplyRoot(node);
+        const applyRoot = collectCommentsVideoGuardRoots(
+          commentsVideoGuardRoots,
+          node,
+        );
         if (applyRoot) {
-          syncCommentsVideoGuard(applyRoot);
           scheduleApply(applyRoot);
         }
 
         if (containsUploaderSource(node)) {
-          cachedUploaderPaths = new Set();
+          invalidateCachedUploaderPaths();
           scheduleApply(document.querySelector("ytd-comments") || document);
         }
       });
     }
+
+    commentsVideoGuardRoots.forEach((comments) =>
+      syncCommentsVideoGuard(comments),
+    );
   });
 
   const startObserving = () => {

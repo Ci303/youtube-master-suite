@@ -30,15 +30,30 @@ jobs:
       - name: Verify generated master
         run: node build-master.mjs --check
 
+      - name: Exercise verification safeguards
+        run: |
+          node build-master.mjs --self-test
+          node refresh-source-lock.mjs --self-test
+          node verify-master.mjs --self-test
+          node verify-installed-master.mjs --self-test
+
       - name: Run repository verifier
         env:
           VERIFY_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
         run: |
-          if [[ -n "$VERIFY_BASE_REF" && ! "$VERIFY_BASE_REF" =~ ^0+$ ]]; then
-            if ! git cat-file -e "${VERIFY_BASE_REF}^{commit}" 2>/dev/null; then
-              git fetch --no-tags --depth=1 origin "$VERIFY_BASE_REF"
+          base_ref="$VERIFY_BASE_REF"
+          if [[ -z "$base_ref" || "$base_ref" =~ ^0+$ ]]; then
+            if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+              base_ref="HEAD^"
+            else
+              base_ref=""
             fi
-            node verify-master.mjs --base "$VERIFY_BASE_REF"
+          fi
+          if [[ -n "$base_ref" ]]; then
+            if ! git cat-file -e "${base_ref}^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "$base_ref"
+            fi
+            node verify-master.mjs --base "$base_ref"
           else
             node verify-master.mjs
           fi

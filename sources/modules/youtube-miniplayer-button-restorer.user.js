@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Miniplayer Button Restorer
 // @namespace    Citizen.youtube.miniplayer-button-restorer
-// @version      1.3
+// @version      1.4
 // @description  Restores a Miniplayer button to YouTube watch and live player controls, falling back to the native miniplayer shortcut when needed.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-miniplayer-button-restorer
@@ -26,12 +26,13 @@
     navRetryDelays: [300, 900, 1800, 3500],
   };
 
-  const PLAYER_SELECTORS = [".html5-video-player", "#movie_player"];
+  const PLAYER_SELECTORS = ["#movie_player", ".html5-video-player"];
   const RIGHT_CONTROLS_SELECTOR = ".ytp-right-controls";
   const NATIVE_MINIPLAYER_BUTTON_SELECTOR = ".ytp-miniplayer-button";
   const FULLSCREEN_BUTTON_SELECTOR = ".ytp-fullscreen-button";
 
   let observing = false;
+  let installedButton = null;
 
   function isEligiblePath() {
     const p = location.pathname;
@@ -104,7 +105,10 @@
   }
 
   function clickNativeMiniplayerIfPresent() {
-    const nativeBtn = Array.from(document.querySelectorAll(NATIVE_MINIPLAYER_BUTTON_SELECTOR))
+    const player = getPlayerEl();
+    if (!player) return false;
+
+    const nativeBtn = Array.from(player.querySelectorAll(NATIVE_MINIPLAYER_BUTTON_SELECTOR))
       .find((btn) => (
         btn.id !== BTN_ID &&
         !btn.disabled &&
@@ -207,16 +211,24 @@
   }
 
   function removeButton() {
-    const btn = document.getElementById(BTN_ID);
+    const btn = installedButton?.isConnected
+      ? installedButton
+      : document.getElementById(BTN_ID);
     if (btn) btn.remove();
+    installedButton = null;
   }
 
   function isButtonInstalled() {
-    const button = document.getElementById(BTN_ID);
+    const button = installedButton;
     if (!button?.isConnected) return false;
 
-    const controls = getRightControls();
-    return Boolean(controls && button.parentElement === controls);
+    const controls = button.parentElement;
+    const player = getPlayerEl();
+    return Boolean(
+      player &&
+      controls?.matches(RIGHT_CONTROLS_SELECTOR) &&
+      player.contains(controls)
+    );
   }
 
   function installOnce() {
@@ -229,7 +241,10 @@
     if (!controls) return false;
 
     const existing = document.getElementById(BTN_ID);
-    if (existing && existing.parentElement === controls) return true;
+    if (existing && existing.parentElement === controls) {
+      installedButton = existing;
+      return true;
+    }
 
     const fullscreenBtn = controls.querySelector(FULLSCREEN_BUTTON_SELECTOR);
     const btn = existing || makeButton();
@@ -239,6 +254,7 @@
     } else {
       controls.appendChild(btn);
     }
+    installedButton = btn;
     return true;
   }
 
@@ -351,6 +367,7 @@
 
   window.addEventListener("yt-navigate-finish", onNavigate);
   window.addEventListener("yt-page-data-updated", onNavigate);
+  window.addEventListener("pageshow", onNavigate);
 
   ensureStyles();
   runInstall();

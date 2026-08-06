@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.20
+// @version      0.1.21
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -19,10 +19,10 @@
 // or the module switches, then rebuild; do not edit module bodies here.
 //
 // Source manifest:
-//   Comment Cleaner v1.13 | sources/modules/youtube-comment-cleaner.user.js | sha256:9bc3370083578888b121961285eb6ab280296f4b3f508caabd220473c3addf72
+//   Comment Cleaner v1.14 | sources/modules/youtube-comment-cleaner.user.js | sha256:3f3cfc46728dd903dbbe2e2ad6d031201796ca801c1d602bfcd1a0736eeee977
 //   Feed UI Cleaner v2.3 | sources/modules/youtube-feed-ui-cleaner.user.js | sha256:7e3d357af994e20ce61fdd717732403f1d1fba9273f109ea17d7c82608b21b69
-//   Miniplayer Button Restorer v1.3 | sources/modules/youtube-miniplayer-button-restorer.user.js | sha256:fb9ed1668ea8c4e06c45e713800c17a10dd67e5e2e106d46f609b6e6d5cd5de1
-//   Page Coherence Guard v1.0 | sources/modules/youtube-page-coherence.user.js | sha256:6345c396147a8c70400c6a9f9d323c75d443e5a0bb995a10f4fbd84b7571eb2c
+//   Miniplayer Button Restorer v1.4 | sources/modules/youtube-miniplayer-button-restorer.user.js | sha256:4cdb1ab40ccf08d695797e83cf7253f170fbec4606bed8b5e06270960c0cdc8b
+//   Page Coherence Guard v1.1 | sources/modules/youtube-page-coherence.user.js | sha256:cb81d2a4de0790c385f4308f9a975c4036e85b7843ce53e62be658dd658ae99b
 //   Player Preferences Lite v1.33 | sources/modules/youtube-player-preferences-lite.user.js | sha256:2f8dc74c993f6b7185c221491a08f15b99b3999f6058b528074f1da3e4eb51b6
 //   Scroll Miniplayer v5.8 | sources/modules/youtube-scroll-miniplayer.user.js | sha256:e5ba2b1fdc43efc1d0a4202cdd0259242f4b5c01904f96584abc771e21f861c2
 //   Watch Layout Cleaner v1.25 | sources/modules/youtube-watch-layout-cleaner.user.js | sha256:bcf15f6e55f62a3d012de72d28875fd5a6b69686e0bbf269653a392910df9fc8
@@ -30,7 +30,7 @@
 (() => {
   "use strict";
 
-  const MASTER_VERSION = "0.1.20";
+  const MASTER_VERSION = "0.1.21";
   const EXPECTED_MODULE_COUNT = 7;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -78,8 +78,11 @@
   let mutationRefreshPending = false;
   let styleRenderPending = false;
 
-  function reportModuleError(label, error) {
-    console.error(`[YouTube Master Suite] ${label} failed`, error);
+  function reportModuleError(ownerId, label, error) {
+    console.error(
+      `[YouTube Master Suite] [${ownerId}] ${label} failed`,
+      error,
+    );
   }
 
   function now() {
@@ -209,7 +212,11 @@
                 () => invokeEventListener(registeredListener.listener, event),
               );
             } catch (error) {
-              reportModuleError(`${type} event listener`, error);
+              reportModuleError(
+                registeredListener.ownerId,
+                `${type} event listener`,
+                error,
+              );
             }
           }
         },
@@ -256,7 +263,11 @@
           () => observer.callback(matchingMutations, observer),
         );
       } catch (error) {
-        reportModuleError("mutation observer callback", error);
+        reportModuleError(
+          observer.ownerId,
+          "mutation observer callback",
+          error,
+        );
       }
     }
   }
@@ -402,7 +413,7 @@
         status: "failed",
         error: String(error?.message || error).slice(0, 500),
       });
-      reportModuleError(label, error);
+      reportModuleError(id, label, error);
     } finally {
       activeModuleId = previousModuleId;
     }
@@ -501,7 +512,7 @@
 
   suite.registerModule(
     "commentCleaner",
-    "Comment Cleaner v1.13",
+    "Comment Cleaner v1.14",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -720,10 +731,14 @@
           uploaderPathsFallbackTimer = 0;
         };
 
-        const invalidateUploaderPaths = () => {
-          clearUploaderPathsFallback();
+        const invalidateCachedUploaderPaths = () => {
           lastVideoKey = "";
           cachedUploaderPaths = new Set();
+        };
+
+        const invalidateUploaderPaths = () => {
+          clearUploaderPathsFallback();
+          invalidateCachedUploaderPaths();
           uploaderPathsReadyVideoKey = "";
         };
 
@@ -1065,33 +1080,55 @@
           );
         };
 
+        const collectCommentsVideoGuardRoots = (roots, node) => {
+          const applyRoot = getCommentMutationApplyRoot(node);
+          if (!applyRoot) return null;
+
+          getCommentContainers(applyRoot).forEach((comments) => roots.add(comments));
+          return applyRoot;
+        };
+
         const observer = new MutationObserver((mutations) => {
           if (!isWatchPath()) return;
 
+          const commentsVideoGuardRoots = new Set();
+
           for (const mutation of mutations) {
             if (mutation.type === "attributes") {
-              const applyRoot = getCommentMutationApplyRoot(mutation.target);
-              if (applyRoot) syncCommentsVideoGuard(applyRoot);
+              collectCommentsVideoGuardRoots(
+                commentsVideoGuardRoots,
+                mutation.target,
+              );
+
+              if (containsUploaderSource(mutation.target)) {
+                invalidateCachedUploaderPaths();
+                scheduleApply(document.querySelector("ytd-comments") || document);
+              }
               continue;
             }
 
-            const mutationRoot = getCommentMutationApplyRoot(mutation.target);
-            if (mutationRoot) syncCommentsVideoGuard(mutationRoot);
+            collectCommentsVideoGuardRoots(commentsVideoGuardRoots, mutation.target);
             if (!mutation.addedNodes.length) continue;
 
             mutation.addedNodes.forEach((node) => {
-              const applyRoot = getCommentMutationApplyRoot(node);
+              const applyRoot = collectCommentsVideoGuardRoots(
+                commentsVideoGuardRoots,
+                node,
+              );
               if (applyRoot) {
-                syncCommentsVideoGuard(applyRoot);
                 scheduleApply(applyRoot);
               }
 
               if (containsUploaderSource(node)) {
-                cachedUploaderPaths = new Set();
+                invalidateCachedUploaderPaths();
                 scheduleApply(document.querySelector("ytd-comments") || document);
               }
             });
           }
+
+          commentsVideoGuardRoots.forEach((comments) =>
+            syncCommentsVideoGuard(comments),
+          );
         });
 
         const startObserving = () => {
@@ -1457,7 +1494,7 @@
 
   suite.registerModule(
     "miniplayerButtonRestorer",
-    "Miniplayer Button Restorer v1.3",
+    "Miniplayer Button Restorer v1.4",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -1474,12 +1511,13 @@
           navRetryDelays: [300, 900, 1800, 3500],
         };
 
-        const PLAYER_SELECTORS = [".html5-video-player", "#movie_player"];
+        const PLAYER_SELECTORS = ["#movie_player", ".html5-video-player"];
         const RIGHT_CONTROLS_SELECTOR = ".ytp-right-controls";
         const NATIVE_MINIPLAYER_BUTTON_SELECTOR = ".ytp-miniplayer-button";
         const FULLSCREEN_BUTTON_SELECTOR = ".ytp-fullscreen-button";
 
         let observing = false;
+        let installedButton = null;
 
         function isEligiblePath() {
           const p = location.pathname;
@@ -1547,7 +1585,10 @@
         }
 
         function clickNativeMiniplayerIfPresent() {
-          const nativeBtn = Array.from(document.querySelectorAll(NATIVE_MINIPLAYER_BUTTON_SELECTOR))
+          const player = getPlayerEl();
+          if (!player) return false;
+
+          const nativeBtn = Array.from(player.querySelectorAll(NATIVE_MINIPLAYER_BUTTON_SELECTOR))
             .find((btn) => (
               btn.id !== BTN_ID &&
               !btn.disabled &&
@@ -1650,16 +1691,24 @@
         }
 
         function removeButton() {
-          const btn = document.getElementById(BTN_ID);
+          const btn = installedButton?.isConnected
+            ? installedButton
+            : document.getElementById(BTN_ID);
           if (btn) btn.remove();
+          installedButton = null;
         }
 
         function isButtonInstalled() {
-          const button = document.getElementById(BTN_ID);
+          const button = installedButton;
           if (!button?.isConnected) return false;
 
-          const controls = getRightControls();
-          return Boolean(controls && button.parentElement === controls);
+          const controls = button.parentElement;
+          const player = getPlayerEl();
+          return Boolean(
+            player &&
+            controls?.matches(RIGHT_CONTROLS_SELECTOR) &&
+            player.contains(controls)
+          );
         }
 
         function installOnce() {
@@ -1672,7 +1721,10 @@
           if (!controls) return false;
 
           const existing = document.getElementById(BTN_ID);
-          if (existing && existing.parentElement === controls) return true;
+          if (existing && existing.parentElement === controls) {
+            installedButton = existing;
+            return true;
+          }
 
           const fullscreenBtn = controls.querySelector(FULLSCREEN_BUTTON_SELECTOR);
           const btn = existing || makeButton();
@@ -1682,6 +1734,7 @@
           } else {
             controls.appendChild(btn);
           }
+          installedButton = btn;
           return true;
         }
 
@@ -1794,6 +1847,7 @@
 
         suite.addWindowListener("yt-navigate-finish", onNavigate);
         suite.addWindowListener("yt-page-data-updated", onNavigate);
+        suite.addWindowListener("pageshow", onNavigate);
 
         ensureStyles();
         runInstall();
@@ -1803,7 +1857,7 @@
 
   suite.registerModule(
     "pageCoherence",
-    "Page Coherence Guard v1.0",
+    "Page Coherence Guard v1.1",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -2129,10 +2183,16 @@
         document.addEventListener(
           "loadedmetadata",
           (event) => {
-            if (event.target?.matches?.("video")) {
-              recordNavigationEvent("loadedmetadata");
-              scheduleChecks();
-            }
+            if (!isWatchPath()) return;
+
+            const player = document.querySelector("#movie_player");
+            const activeVideo =
+              player?.querySelector("video.html5-main-video") ||
+              player?.querySelector("video");
+            if (event.target !== activeVideo) return;
+
+            recordNavigationEvent("loadedmetadata");
+            scheduleChecks();
           },
           true,
         );

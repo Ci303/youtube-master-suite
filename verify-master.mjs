@@ -10,22 +10,50 @@ const userscriptPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const manualCopyPath = join(suiteDirectory, "youtube-master-suite.txt");
 const releaseManifestPath = join(suiteDirectory, "release-manifest.json");
 const sourceLockPath = join(suiteDirectory, "sources.lock.json");
-const releaseMode = process.argv.includes("--release");
-const baseOptionIndexes = process.argv
-  .map((argument, index) => (argument === "--base" ? index : -1))
-  .filter((index) => index !== -1);
-if (baseOptionIndexes.length > 1) {
-  throw new Error("Specify --base at most once");
+
+const VERIFY_USAGE =
+  "Usage: node verify-master.mjs [--release] [--base <git-ref>] | --self-test";
+
+function parseVerifyArguments(arguments_) {
+  let releaseMode = false;
+  let selfTestMode = false;
+  let explicitBaseRef = null;
+
+  for (let index = 0; index < arguments_.length; index += 1) {
+    const argument = arguments_[index];
+    if (argument === "--release") {
+      if (releaseMode) throw new Error(VERIFY_USAGE);
+      releaseMode = true;
+      continue;
+    }
+    if (argument === "--self-test") {
+      if (selfTestMode) throw new Error(VERIFY_USAGE);
+      selfTestMode = true;
+      continue;
+    }
+    if (argument === "--base") {
+      if (explicitBaseRef !== null) throw new Error(VERIFY_USAGE);
+      const baseRef = arguments_[index + 1];
+      if (!baseRef || baseRef.startsWith("-")) {
+        throw new Error(VERIFY_USAGE);
+      }
+      explicitBaseRef = baseRef;
+      index += 1;
+      continue;
+    }
+    throw new Error(VERIFY_USAGE);
+  }
+
+  if (selfTestMode && (releaseMode || explicitBaseRef !== null)) {
+    throw new Error("--self-test cannot be combined with other verification modes");
+  }
+
+  return { explicitBaseRef, releaseMode, selfTestMode };
 }
-const baseOptionIndex = baseOptionIndexes[0] ?? -1;
-const explicitBaseRef =
-  baseOptionIndex === -1 ? null : process.argv[baseOptionIndex + 1];
-if (
-  baseOptionIndex !== -1 &&
-  (!explicitBaseRef || explicitBaseRef.startsWith("-"))
-) {
-  throw new Error("Usage: node verify-master.mjs [--release] [--base <git-ref>]");
-}
+
+const { explicitBaseRef, releaseMode, selfTestMode } = parseVerifyArguments(
+  process.argv.slice(2),
+);
 
 function run(command, args, options = {}) {
   return execFileSync(command, args, {
@@ -50,17 +78,128 @@ function occurrences(source, value) {
   return source.split(value).length - 1;
 }
 
-function compareVersions(left, right) {
-  assert.match(left, /^\d+\.\d+\.\d+$/, `Invalid version: ${left}`);
-  assert.match(right, /^\d+\.\d+\.\d+$/, `Invalid version: ${right}`);
+function compareDottedVersions(left, right) {
+  assert.match(left, /^\d+(?:\.\d+)+$/, `Invalid dotted version: ${left}`);
+  assert.match(right, /^\d+(?:\.\d+)+$/, `Invalid dotted version: ${right}`);
   const leftParts = left.split(".").map(Number);
   const rightParts = right.split(".").map(Number);
+  assert(
+    [...leftParts, ...rightParts].every(Number.isSafeInteger),
+    "Dotted version components must be safe integers",
+  );
   const partCount = Math.max(leftParts.length, rightParts.length);
   for (let index = 0; index < partCount; index += 1) {
     const difference = (leftParts[index] || 0) - (rightParts[index] || 0);
     if (difference) return difference;
   }
   return 0;
+}
+
+function compareVersions(left, right) {
+  assert.match(left, /^\d+\.\d+\.\d+$/, `Invalid version: ${left}`);
+  assert.match(right, /^\d+\.\d+\.\d+$/, `Invalid version: ${right}`);
+  return compareDottedVersions(left, right);
+}
+
+function assertChangedModuleVersionsIncreased(
+  currentSourceLock,
+  comparisonSourceLock,
+  comparisonRef,
+) {
+  const currentModules = currentSourceLock.modules || {};
+  const comparisonModules = comparisonSourceLock.modules || {};
+  for (const [moduleId, currentModule] of Object.entries(currentModules)) {
+    const comparisonModule = comparisonModules[moduleId];
+    if (!comparisonModule || currentModule.sha256 === comparisonModule.sha256) {
+      continue;
+    }
+    assert(
+      compareDottedVersions(currentModule.version, comparisonModule.version) > 0,
+      `${moduleId}: source changes since ${comparisonRef} require a component version increase ` +
+        `(comparison ${comparisonModule.version}, current ${currentModule.version})`,
+    );
+  }
+}
+
+function assertReleaseVersionAboveStableTags(currentVersion, stableTags) {
+  const currentTag = `v${currentVersion}`;
+  for (const tag of stableTags) {
+    assert.match(tag, /^v\d+\.\d+\.\d+$/, `Invalid stable version tag: ${tag}`);
+    if (tag === currentTag) continue;
+    assert(
+      compareVersions(currentVersion, tag.slice(1)) > 0,
+      `Release version ${currentVersion} must be greater than stable tag ${tag}`,
+    );
+  }
+}
+
+function runSelfTests() {
+  assert.deepEqual(
+    parseVerifyArguments(["--release", "--base", "HEAD^"]),
+    {
+      explicitBaseRef: "HEAD^",
+      releaseMode: true,
+      selfTestMode: false,
+    },
+  );
+  assert.throws(
+    () => parseVerifyArguments(["--relase"]),
+    /Usage: node verify-master\.mjs/,
+  );
+  assert.throws(
+    () => parseVerifyArguments(["--release", "--self-test"]),
+    /cannot be combined/,
+  );
+  assert.throws(
+    () => parseVerifyArguments(["--base"]),
+    /Usage: node verify-master\.mjs/,
+  );
+
+  assert(compareVersions("1.10.0", "1.9.9") > 0);
+  assert(compareVersions("2.0.0", "2.0.1") < 0);
+  assert.equal(compareVersions("3.4.5", "3.4.5"), 0);
+  assert.doesNotThrow(() =>
+    assertReleaseVersionAboveStableTags("1.2.0", ["v1.0.0", "v1.1.9"]),
+  );
+  assert.throws(
+    () => assertReleaseVersionAboveStableTags("1.2.0", ["v1.3.0"]),
+    /must be greater than stable tag/,
+  );
+  const comparisonSourceLock = {
+    modules: {
+      fixture: { version: "1.9", sha256: "a".repeat(64) },
+    },
+  };
+  assert.doesNotThrow(() =>
+    assertChangedModuleVersionsIncreased(
+      {
+        modules: {
+          fixture: { version: "1.10", sha256: "b".repeat(64) },
+        },
+      },
+      comparisonSourceLock,
+      "fixture-base",
+    ),
+  );
+  assert.throws(
+    () =>
+      assertChangedModuleVersionsIncreased(
+        {
+          modules: {
+            fixture: { version: "1.9", sha256: "b".repeat(64) },
+          },
+        },
+        comparisonSourceLock,
+        "fixture-base",
+      ),
+    /require a component version increase/,
+  );
+  console.log("Verified master-version comparison safeguards");
+}
+
+if (selfTestMode) {
+  runSelfTests();
+  process.exit(0);
 }
 
 function escapeRegExp(value) {
@@ -128,6 +267,18 @@ const buildSource = readFileSync(
   join(suiteDirectory, "build-master.mjs"),
   "utf8",
 );
+const refreshSourceLockSource = readFileSync(
+  join(suiteDirectory, "refresh-source-lock.mjs"),
+  "utf8",
+);
+const installedVerifierSource = readFileSync(
+  join(suiteDirectory, "verify-installed-master.mjs"),
+  "utf8",
+);
+const workflowSource = readFileSync(
+  join(suiteDirectory, ".github", "workflows", "verify.yml"),
+  "utf8",
+);
 const expectedUrl =
   "https://raw.githubusercontent.com/Ci303/youtube-master-suite/main/" +
   "youtube-master-suite.user.js";
@@ -177,6 +328,27 @@ assert(
     String.raw`/\bdocument\s*\.\s*createElement\s*\(\s*["']style["']\s*\)/`,
   ),
   "The stylesheet residual guard must tolerate whitespace and quote variants",
+);
+assert(
+  buildSource.includes("runTransformSelfTests();"),
+  "The build transform safeguards must have an executable self-test",
+);
+assert(
+  refreshSourceLockSource.includes(
+    "assertVersionIncreaseForChangedSource(",
+  ),
+  "Source-lock refreshes must require a version increase for changed content",
+);
+assert(
+  installedVerifierSource.includes(
+    "Installed-source corruption must be rejected",
+  ),
+  "The installed-source verifier must exercise its corruption guard",
+);
+assert.match(
+  workflowSource,
+  /base_ref="HEAD\^"/,
+  "CI must compare against HEAD^ when its event base SHA is empty or zero",
 );
 
 const canonicalSources = new Map();
@@ -244,6 +416,20 @@ assert.match(
   /const mo = new MutationObserver\(\(muts\) => \{\s+if \(isButtonInstalled\(\)\) return;/,
   "Miniplayer Button Restorer must skip redundant mutation work once installed",
 );
+
+const miniplayerButtonSource =
+  canonicalSources.get("miniplayerButtonRestorer") || "";
+for (const miniplayerButtonRequirement of [
+  'const PLAYER_SELECTORS = ["#movie_player", ".html5-video-player"]',
+  "let installedButton = null;",
+  "player.querySelectorAll(NATIVE_MINIPLAYER_BUTTON_SELECTOR)",
+  'window.addEventListener("pageshow", onNavigate);',
+]) {
+  assert(
+    miniplayerButtonSource.includes(miniplayerButtonRequirement),
+    `Missing Miniplayer Button Restorer lifecycle requirement: ${miniplayerButtonRequirement}`,
+  );
+}
 for (const countAlignmentRequirement of [
   ":is(#segmented-like-button, #segmented-dislike-button)",
   "align-self: center !important;",
@@ -295,6 +481,23 @@ for (const staleCommentRequirement of [
     `Missing stale-comment guard requirement: ${staleCommentRequirement}`,
   );
 }
+const commentCleanerSource = canonicalSources.get("commentCleaner") || "";
+for (const commentCleanerRequirement of [
+  "const invalidateCachedUploaderPaths = () => {",
+  "const commentsVideoGuardRoots = new Set();",
+  "invalidateCachedUploaderPaths();",
+  "commentsVideoGuardRoots.forEach((comments) =>",
+]) {
+  assert(
+    commentCleanerSource.includes(commentCleanerRequirement),
+    `Missing Comment Cleaner cache or batching requirement: ${commentCleanerRequirement}`,
+  );
+}
+assert.match(
+  commentCleanerSource,
+  /if \(mutation\.type === "attributes"\) \{[\s\S]{0,500}?containsUploaderSource\(mutation\.target\)[\s\S]{0,160}?invalidateCachedUploaderPaths\(\);/,
+  "Uploader href changes must invalidate Comment Cleaner's cached channel paths",
+);
 assert.match(
   userscript,
   /ytd-comments\[\$\{STALE_COMMENTS_ATTRIBUTE\}="1"\]\s*\{[\s\S]+?visibility:hidden !important;[\s\S]+?opacity:0 !important;[\s\S]+?pointer-events:none !important;/,
@@ -427,6 +630,13 @@ assert(
   "Compact queue must prefer an exact URL/player video-ID match",
 );
 
+const pageCoherenceSource = canonicalSources.get("pageCoherence") || "";
+assert.match(
+  pageCoherenceSource,
+  /"loadedmetadata",\s+\(event\) => \{\s+if \(!isWatchPath\(\)\) return;[\s\S]{0,320}?player\?\.querySelector\("video\.html5-main-video"\)[\s\S]{0,180}?if \(event\.target !== activeVideo\) return;/,
+  "Page Coherence must ignore metadata events outside the active watch player",
+);
+
 const playerPreferencesSource =
   canonicalSources.get("playerPreferencesLite") || "";
 for (const layoutRefreshRequirement of [
@@ -479,6 +689,21 @@ assert.match(
   userscript,
   /const DIAGNOSTICS = Object\.freeze\(\{\s+enabled: false,/,
   "Diagnostics must remain disabled by default",
+);
+assert.match(
+  userscript,
+  /function reportModuleError\(ownerId, label, error\) \{[\s\S]+?\[\$\{ownerId\}\]/,
+  "Shared runtime errors must identify their owning module",
+);
+assert.match(
+  userscript,
+  /reportModuleError\(\s+registeredListener\.ownerId,\s+`\$\{type\} event listener`,/,
+  "Shared lifecycle listener errors must report their owning module",
+);
+assert.match(
+  userscript,
+  /reportModuleError\(\s+observer\.ownerId,\s+"mutation observer callback",/,
+  "Shared mutation callback errors must report their owning module",
 );
 assert(
   userscript.includes("globalThis.__YT_MASTER_DIAGNOSTICS__"),
@@ -590,6 +815,36 @@ if (explicitBaseRef) {
   }
 }
 
+let comparisonSourceLockExists = false;
+try {
+  git(
+    suiteDirectory,
+    "cat-file",
+    "-e",
+    `${versionComparisonRef}:sources.lock.json`,
+  );
+  comparisonSourceLockExists = true;
+} catch {
+  // The source lock may not exist in the initial repository commit.
+}
+if (comparisonSourceLockExists) {
+  let comparisonSourceLock;
+  try {
+    comparisonSourceLock = JSON.parse(
+      git(suiteDirectory, "show", `${versionComparisonRef}:sources.lock.json`),
+    );
+  } catch (error) {
+    assert.fail(
+      `Unable to read or parse sources.lock.json from ${versionComparisonRef}: ${error.message}`,
+    );
+  }
+  assertChangedModuleVersionsIncreased(
+    sourceLock,
+    comparisonSourceLock,
+    versionComparisonRef,
+  );
+}
+
 let comparisonUserscript = "";
 let comparisonArtifactExists = false;
 try {
@@ -623,18 +878,48 @@ if (
 }
 
 if (releaseMode) {
-  assert.equal(git(suiteDirectory, "status", "--short"), "");
+  assert.equal(
+    git(suiteDirectory, "status", "--short"),
+    "",
+    "Release verification requires a clean working tree",
+  );
+  assert.equal(
+    git(suiteDirectory, "branch", "--show-current"),
+    "main",
+    "Releases must be verified from the main branch",
+  );
   assert.equal(
     git(
       suiteDirectory,
-      "rev-list",
-      "--left-right",
-      "--count",
-      "HEAD...@{upstream}",
+      "rev-parse",
+      "--abbrev-ref",
+      "--symbolic-full-name",
+      "@{upstream}",
     ),
-    "0\t0",
-    "Master repository is not synchronised with upstream",
+    "origin/main",
+    "The main branch must track origin/main before release",
   );
+
+  const headCommit = git(suiteDirectory, "rev-parse", "HEAD");
+  assert.equal(
+    headCommit,
+    git(suiteDirectory, "rev-parse", "origin/main"),
+    "HEAD must exactly match origin/main before release",
+  );
+
+  const currentVersion = metadata(userscript, "version");
+  const currentTag = `v${currentVersion}`;
+  const stableTags = git(suiteDirectory, "tag", "--list")
+    .split(/\r?\n/)
+    .filter((tag) => /^v\d+\.\d+\.\d+$/.test(tag));
+  assertReleaseVersionAboveStableTags(currentVersion, stableTags);
+  if (stableTags.includes(currentTag)) {
+    assert.equal(
+      git(suiteDirectory, "rev-parse", `${currentTag}^{commit}`),
+      headCommit,
+      `${currentTag} exists but does not point to HEAD`,
+    );
+  }
 }
 
 console.log(

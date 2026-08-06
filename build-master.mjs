@@ -3,12 +3,34 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MASTER_VERSION = "0.1.20";
+const MASTER_VERSION = "0.1.21";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const outputPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const releaseManifestPath = join(suiteDirectory, "release-manifest.json");
 const sourceLockPath = join(suiteDirectory, "sources.lock.json");
-const checkOnly = process.argv.includes("--check");
+
+const BUILD_USAGE =
+  "Usage: node build-master.mjs [--check | --self-test]";
+
+function parseBuildArguments(arguments_) {
+  const allowedArguments = new Set(["--check", "--self-test"]);
+  if (
+    arguments_.some((argument) => !allowedArguments.has(argument)) ||
+    new Set(arguments_).size !== arguments_.length ||
+    arguments_.length > 1
+  ) {
+    throw new Error(BUILD_USAGE);
+  }
+
+  return {
+    checkOnly: arguments_[0] === "--check",
+    selfTestMode: arguments_[0] === "--self-test",
+  };
+}
+
+const { checkOnly, selfTestMode } = parseBuildArguments(
+  process.argv.slice(2),
+);
 const sourceLock = JSON.parse(readFileSync(sourceLockPath, "utf8"));
 if (sourceLock.schemaVersion !== 2) {
   throw new Error(`Unsupported source-lock schema ${sourceLock.schemaVersion}`);
@@ -354,6 +376,67 @@ function transformModuleBody(moduleDefinition, body) {
   return transformed;
 }
 
+function runTransformSelfTests() {
+  const checkArguments = parseBuildArguments(["--check"]);
+  if (!checkArguments.checkOnly || checkArguments.selfTestMode) {
+    throw new Error("Build argument parsing self-test failed");
+  }
+  for (const invalidArguments of [
+    ["--chek"],
+    ["--check", "--self-test"],
+    ["--check", "--check"],
+  ]) {
+    let rejected = false;
+    try {
+      parseBuildArguments(invalidArguments);
+    } catch (error) {
+      rejected = String(error?.message || error) === BUILD_USAGE;
+    }
+    if (!rejected) {
+      throw new Error(
+        `Build argument rejection self-test failed: ${invalidArguments.join(" ")}`,
+      );
+    }
+  }
+
+  const fixtureDefinition = {
+    id: "fixture",
+    source: "fixture.user.js",
+  };
+  const transformedListener = transformModuleBody(
+    fixtureDefinition,
+    'window \n  . addEventListener ( "pageshow", callback );',
+  );
+  if (
+    transformedListener !==
+    'suite.addWindowListener( "pageshow", callback );'
+  ) {
+    throw new Error("Window-listener transform self-test failed");
+  }
+
+  let rejectedStyleCreation = false;
+  try {
+    transformModuleBody(
+      fixtureDefinition,
+      "const style = document \n  . createElement ( 'style' );",
+    );
+  } catch (error) {
+    rejectedStyleCreation = /stylesheet transform incomplete/.test(
+      String(error?.message || error),
+    );
+  }
+  if (!rejectedStyleCreation) {
+    throw new Error("Stylesheet residual-guard self-test failed");
+  }
+
+  console.log("Verified build transform safeguards");
+}
+
+if (selfTestMode) {
+  runTransformSelfTests();
+  process.exit(0);
+}
+
 const sourceModules = await Promise.all(
   modules.map(async (moduleDefinition) => {
     const { sourcePath, source } = await readModuleSource(moduleDefinition);
@@ -468,8 +551,11 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
   let mutationRefreshPending = false;
   let styleRenderPending = false;
 
-  function reportModuleError(label, error) {
-    console.error(\`[YouTube Master Suite] \${label} failed\`, error);
+  function reportModuleError(ownerId, label, error) {
+    console.error(
+      \`[YouTube Master Suite] [\${ownerId}] \${label} failed\`,
+      error,
+    );
   }
 
   function now() {
@@ -599,7 +685,11 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
                 () => invokeEventListener(registeredListener.listener, event),
               );
             } catch (error) {
-              reportModuleError(\`\${type} event listener\`, error);
+              reportModuleError(
+                registeredListener.ownerId,
+                \`\${type} event listener\`,
+                error,
+              );
             }
           }
         },
@@ -646,7 +736,11 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
           () => observer.callback(matchingMutations, observer),
         );
       } catch (error) {
-        reportModuleError("mutation observer callback", error);
+        reportModuleError(
+          observer.ownerId,
+          "mutation observer callback",
+          error,
+        );
       }
     }
   }
@@ -792,7 +886,7 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
         status: "failed",
         error: String(error?.message || error).slice(0, 500),
       });
-      reportModuleError(label, error);
+      reportModuleError(id, label, error);
     } finally {
       activeModuleId = previousModuleId;
     }

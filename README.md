@@ -15,10 +15,10 @@ or install it.
 
 | Module | Source version | Purpose |
 | --- | ---: | --- |
-| Comment Cleaner | 1.13 | Hides comment engagement and composer clutter, prevents stale comments from appearing after queue navigation, compacts spacing, and distinguishes uploader and commenter names. |
+| Comment Cleaner | 1.14 | Hides comment engagement and composer clutter, prevents stale comments from appearing after queue navigation, compacts spacing, and distinguishes uploader and commenter names. Uploader-link cache changes and comment freshness checks are batched per mutation delivery. |
 | Feed UI Cleaner | 2.3 | Removes unwanted feed shelves, chips, advertisements, mixes, members-only cards, podcasts, and resulting gaps while preserving YouTube search. |
-| Miniplayer Button Restorer | 1.3 | Restores the native-style miniplayer control when YouTube omits it, while avoiding redundant installation work once attached. |
-| Page Coherence Guard | 1.0 | Detects incomplete queue navigation, hides confirmed stale metadata and comments, offers an explicit page-data reload, and publishes lightweight navigation-state diagnostics. |
+| Miniplayer Button Restorer | 1.4 | Restores the native-style miniplayer control when YouTube omits it, uses the current player for its fast path and native fallback, and recovers after a back/forward-cache restore. |
+| Page Coherence Guard | 1.1 | Detects incomplete queue navigation, hides confirmed stale metadata and comments, offers an explicit page-data reload, and publishes lightweight navigation-state diagnostics. Metadata events from feed previews and inactive videos are ignored. |
 | Player Preferences Lite | 1.33 | Applies player, feed, description, live-chat, volume, quality, Shorts, and watch-page preferences without taking over YouTube's queue or native miniplayer. Keeps native like and Return YouTube Dislike counts vertically aligned. Watched-video filtering deliberately excludes Watch History. Info cards, recommendation grids, and the single autoplay up-next card have independent settings. Layout refresh retries are coalesced, and ordinary wheel events avoid player lookup. |
 | Scroll Miniplayer | 5.8 | Floats the active watch or live player when it leaves the viewport and shows compact current-title and queue-position context while the full queue remains hidden. Navigation is locked until the new route settles, queue context follows the current watch or live video ID, and observation stops off eligible routes. |
 | Watch Layout Cleaner | 1.25 | Expands watch-page content, keeps the right rail at the SponsorBlock-friendly `374px` width, widens metadata and comments, and provides queue-thumbnail fallbacks. |
@@ -44,8 +44,8 @@ deliberately avoids concatenating independent userscripts unchanged.
 - All module CSS is rendered through one ordered stylesheet element.
 - Document-start and document-idle modules retain their original execution
   phases.
-- A failing module is caught and reported without preventing the other modules
-  from starting.
+- A failing module is caught and reported with its module ID without preventing
+  the other modules from starting.
 - Each module keeps its original configuration, selectors, functions, timers,
   and state scope.
 - Top-level `ENABLED_MODULES` switches allow one module to be isolated during
@@ -223,9 +223,12 @@ node .\verify-installed-master.mjs .\youtube-master-suite.user.js
 ```
 
 `node .\build-master.mjs --check` verifies that the generated userscript is
-current without writing it. `node .\verify-master.mjs --release` additionally
-requires a clean, upstream-synchronised maintainer checkout and a matching
-local `.txt` copy.
+current without writing it. The build, source-lock refresher and both
+verifiers also expose dependency-free `--self-test` checks, which CI executes.
+`node .\verify-master.mjs --release` additionally requires a clean `main`
+checkout tracking and exactly matching `origin/main`, a version newer than all
+other stable tags, a correctly placed current-version tag if one already
+exists, and a matching local `.txt` copy.
 
 Identical locked inputs produce an identical userscript and SHA-256 hash.
 GitHub Actions runs the build check, verifier and syntax checks on every push
@@ -245,9 +248,11 @@ Copy-Item .\youtube-master-suite.user.js .\youtube-master-suite.txt -Force
 node .\verify-master.mjs
 ```
 
-The refresh command only updates module versions and hashes. Review its diff
-before building. A normal build refuses any canonical source whose content or
-version differs from the lock.
+The refresh command only updates module versions and hashes. It refuses a
+changed canonical source unless that module's dotted numeric metadata version
+has increased, and it validates every module before writing the lock. Review
+its diff before building. A normal build refuses any canonical source whose
+content or version differs from the lock.
 
 ## TampermonkeyFS workflow
 
@@ -270,9 +275,12 @@ TampermonkeyFS is editor-centred. A permanent change should follow this flow:
 4. Run `node .\verify-master.mjs`.
 5. Let TampermonkeyFS load the changed linked file into its virtual editor.
 6. Save the virtual editor to send the same source to Tampermonkey.
-7. Read the saved script back from Tampermonkey and verify its hash, length and
-   manifest-declared module registrations against `release-manifest.json`
-   before committing.
+7. Read the saved script back from Tampermonkey and require its canonical prefix
+   to equal `youtube-master-suite.user.js` exactly. Tampermonkey Editors appends
+   a separate `---` / `Last modified: <ISO timestamp>` synchronisation footer;
+   validate that footer independently, then verify the canonical prefix's hash,
+   length and module registrations against `release-manifest.json` before
+   committing.
 
 For a file-backed or exported installed copy, run:
 

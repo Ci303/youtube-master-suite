@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Page Coherence Guard
 // @namespace    Citizen.youtube.page-coherence
-// @version      1.0
+// @version      1.1
 // @description  Detects incomplete YouTube queue navigation, hides stale page details, and exposes lightweight navigation diagnostics.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -336,10 +336,16 @@
   document.addEventListener(
     "loadedmetadata",
     (event) => {
-      if (event.target?.matches?.("video")) {
-        recordNavigationEvent("loadedmetadata");
-        scheduleChecks();
-      }
+      if (!isWatchPath()) return;
+
+      const player = document.querySelector("#movie_player");
+      const activeVideo =
+        player?.querySelector("video.html5-main-video") ||
+        player?.querySelector("video");
+      if (event.target !== activeVideo) return;
+
+      recordNavigationEvent("loadedmetadata");
+      scheduleChecks();
     },
     true,
   );
