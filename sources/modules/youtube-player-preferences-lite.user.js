@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Player Preferences Lite
 // @namespace    Citizen.youtube.player-preferences-lite
-// @version      1.32
+// @version      1.33
 // @description  Applies small YouTube player preferences without touching Enhancer-style miniplayer, queue, autoplay, or background playback controls.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-player-preferences-lite
@@ -311,6 +311,7 @@
     "small",
     "tiny",
   ];
+  const PLAYER_LAYOUT_REFRESH_DELAYS_MS = [0, 100, 500, 1200];
 
   let scheduled = false;
   const pendingApplyRoots = new Set();
@@ -320,6 +321,7 @@
   let highestQualityRetryTimers = [];
   let theaterModeAttemptKey = "";
   let playerLayoutRefreshScheduled = false;
+  const playerLayoutRefreshAttemptTimers = new Map();
   let liveChatCollapseAttemptTimers = [];
   let liveChatCollapsePendingTimer = 0;
   let pendingLiveChatFrame = null;
@@ -2244,9 +2246,24 @@
       return;
     }
 
-    [0, 100, 500, 1200].forEach((delay) => {
-      setTimeout(requestPlayerLayoutRefresh, delay);
+    PLAYER_LAYOUT_REFRESH_DELAYS_MS.forEach((delay) => {
+      if (playerLayoutRefreshAttemptTimers.has(delay)) {
+        return;
+      }
+
+      const timerId = setTimeout(() => {
+        playerLayoutRefreshAttemptTimers.delete(delay);
+        requestPlayerLayoutRefresh();
+      }, delay);
+      playerLayoutRefreshAttemptTimers.set(delay, timerId);
     });
+  }
+
+  function clearPlayerLayoutRefreshAttempts() {
+    playerLayoutRefreshAttemptTimers.forEach((timerId) =>
+      clearTimeout(timerId),
+    );
+    playerLayoutRefreshAttemptTimers.clear();
   }
 
   function isLiveChatCollapsed(chatFrame) {
@@ -2596,14 +2613,16 @@
       return;
     }
 
-    const player = getPlayerFromTarget(event.target);
-    if (!player) {
+    if (
+      CONFIG.requireRightMouseButtonForWheelVolume &&
+      (event.buttons & 2) !== 2 &&
+      !rightButtonHeldOnPlayer
+    ) {
       return;
     }
 
-    const rightButtonPressed =
-      (event.buttons & 2) === 2 || rightButtonHeldOnPlayer;
-    if (CONFIG.requireRightMouseButtonForWheelVolume && !rightButtonPressed) {
+    const player = getPlayerFromTarget(event.target);
+    if (!player) {
       return;
     }
 
@@ -2696,6 +2715,11 @@
     theaterModeAttemptKey = "";
     applyRoutePreferences();
     schedulePlayerLayoutRefreshAttempts();
+  }
+
+  function handleNavigateStart() {
+    clearLiveChatCollapseAttempts();
+    clearPlayerLayoutRefreshAttempts();
   }
 
   function handleDescriptionClick(event) {
@@ -2904,11 +2928,7 @@
   document.addEventListener("contextmenu", handleContextMenu, true);
 
   window.addEventListener("blur", handleWindowBlur, true);
-  window.addEventListener(
-    "yt-navigate-start",
-    clearLiveChatCollapseAttempts,
-    true,
-  );
+  window.addEventListener("yt-navigate-start", handleNavigateStart, true);
   window.addEventListener("yt-navigate-finish", handleNavigateFinish, true);
   window.addEventListener(
     "yt-page-data-updated",

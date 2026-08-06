@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,8 +22,8 @@ if (sourceLock.schemaVersion !== 2) {
 }
 
 const modules = Object.entries(sourceLock.modules || {});
-if (modules.length !== 7) {
-  throw new Error(`Expected 7 canonical modules, found ${modules.length}`);
+if (!modules.length) {
+  throw new Error("The source lock does not contain any canonical modules");
 }
 
 const sourcePaths = new Set();
@@ -35,7 +35,30 @@ for (const [moduleId, lockedSource] of modules) {
     throw new Error(`${moduleId}: duplicate canonical source path`);
   }
   sourcePaths.add(lockedSource.path);
+}
 
+const canonicalSourcePaths = readdirSync(
+  join(suiteDirectory, "sources", "modules"),
+  { withFileTypes: true },
+)
+  .filter((entry) => entry.isFile() && entry.name.endsWith(".user.js"))
+  .map((entry) => `sources/modules/${entry.name}`)
+  .sort();
+const lockedSourcePaths = [...sourcePaths].sort();
+if (
+  canonicalSourcePaths.length !== lockedSourcePaths.length ||
+  canonicalSourcePaths.some(
+    (sourcePath, index) => sourcePath !== lockedSourcePaths[index],
+  )
+) {
+  throw new Error(
+    "Source lock and canonical module directory differ: " +
+      `locked [${lockedSourcePaths.join(", ")}], ` +
+      `found [${canonicalSourcePaths.join(", ")}]`,
+  );
+}
+
+for (const [, lockedSource] of modules) {
   const source = readFileSync(join(suiteDirectory, lockedSource.path), "utf8")
     .replace(/\r\n/g, "\n");
   lockedSource.version = metadata(source, "version");

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,6 +11,21 @@ const manualCopyPath = join(suiteDirectory, "youtube-master-suite.txt");
 const releaseManifestPath = join(suiteDirectory, "release-manifest.json");
 const sourceLockPath = join(suiteDirectory, "sources.lock.json");
 const releaseMode = process.argv.includes("--release");
+const baseOptionIndexes = process.argv
+  .map((argument, index) => (argument === "--base" ? index : -1))
+  .filter((index) => index !== -1);
+if (baseOptionIndexes.length > 1) {
+  throw new Error("Specify --base at most once");
+}
+const baseOptionIndex = baseOptionIndexes[0] ?? -1;
+const explicitBaseRef =
+  baseOptionIndex === -1 ? null : process.argv[baseOptionIndex + 1];
+if (
+  baseOptionIndex !== -1 &&
+  (!explicitBaseRef || explicitBaseRef.startsWith("-"))
+) {
+  throw new Error("Usage: node verify-master.mjs [--release] [--base <git-ref>]");
+}
 
 function run(command, args, options = {}) {
   return execFileSync(command, args, {
@@ -33,6 +48,19 @@ function metadata(source, field) {
 
 function occurrences(source, value) {
   return source.split(value).length - 1;
+}
+
+function compareVersions(left, right) {
+  assert.match(left, /^\d+\.\d+\.\d+$/, `Invalid version: ${left}`);
+  assert.match(right, /^\d+\.\d+\.\d+$/, `Invalid version: ${right}`);
+  const leftParts = left.split(".").map(Number);
+  const rightParts = right.split(".").map(Number);
+  const partCount = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < partCount; index += 1) {
+    const difference = (leftParts[index] || 0) - (rightParts[index] || 0);
+    if (difference) return difference;
+  }
+  return 0;
 }
 
 function escapeRegExp(value) {
@@ -96,6 +124,10 @@ const releaseManifest = JSON.parse(
   readFileSync(releaseManifestPath, "utf8"),
 );
 const sourceLock = JSON.parse(readFileSync(sourceLockPath, "utf8"));
+const buildSource = readFileSync(
+  join(suiteDirectory, "build-master.mjs"),
+  "utf8",
+);
 const expectedUrl =
   "https://raw.githubusercontent.com/Ci303/youtube-master-suite/main/" +
   "youtube-master-suite.user.js";
@@ -105,14 +137,50 @@ assert.equal(metadata(userscript, "downloadURL"), expectedUrl);
 assert.equal(metadata(userscript, "name"), "YouTube Master Suite");
 assert.match(metadata(userscript, "version"), /^\d+\.\d+\.\d+$/);
 assert.equal(sourceLock.schemaVersion, 2);
-assert.equal(Object.keys(sourceLock.modules || {}).length, 7);
+const lockedModules = Object.entries(sourceLock.modules || {});
+const expectedModuleCount = lockedModules.length;
+assert(expectedModuleCount > 0, "The source lock must contain canonical modules");
+const lockedSourcePaths = lockedModules.map(
+  ([, lockedSource]) => lockedSource.path,
+);
+assert.equal(
+  new Set(lockedSourcePaths).size,
+  lockedSourcePaths.length,
+  "The source lock contains duplicate canonical source paths",
+);
+const canonicalSourcePaths = readdirSync(
+  join(suiteDirectory, "sources", "modules"),
+  { withFileTypes: true },
+)
+  .filter((entry) => entry.isFile() && entry.name.endsWith(".user.js"))
+  .map((entry) => `sources/modules/${entry.name}`)
+  .sort();
+assert.deepEqual(
+  [...lockedSourcePaths].sort(),
+  canonicalSourcePaths,
+  "Source lock and canonical module directory differ",
+);
 assert.equal(
   occurrences(userscript, "suite.registerModule("),
-  7,
-  "The generated master must contain exactly seven module registrations",
+  expectedModuleCount,
+  "The generated master module count differs from the source lock",
 );
 
-for (const [moduleId, lockedSource] of Object.entries(sourceLock.modules)) {
+assert(
+  buildSource.includes(
+    String.raw`/\bwindow\s*\.\s*addEventListener\s*\(/g`,
+  ),
+  "The window-listener transform must tolerate whitespace",
+);
+assert(
+  buildSource.includes(
+    String.raw`/\bdocument\s*\.\s*createElement\s*\(\s*["']style["']\s*\)/`,
+  ),
+  "The stylesheet residual guard must tolerate whitespace and quote variants",
+);
+
+const canonicalSources = new Map();
+for (const [moduleId, lockedSource] of lockedModules) {
   assert.match(
     lockedSource.path,
     /^sources\/modules\/[a-z0-9-]+\.user\.js$/,
@@ -123,6 +191,7 @@ for (const [moduleId, lockedSource] of Object.entries(sourceLock.modules)) {
     join(suiteDirectory, lockedSource.path),
     "utf8",
   ).replace(/\r\n/g, "\n");
+  canonicalSources.set(moduleId, canonicalSource);
   verifySharedRuntimeContracts(moduleId, canonicalSource);
   assert.equal(
     metadata(canonicalSource, "version"),
@@ -291,6 +360,110 @@ assert.match(
   /currentItem\.querySelector\(QUEUE_ITEM_TITLE_SELECTOR\) \|\|\s+currentItem\.querySelector\(QUEUE_ITEM_TITLE_FALLBACK_SELECTOR\)/,
   "Compact queue must prefer the explicit video title before its fallback",
 );
+
+const scrollMiniplayerSource = canonicalSources.get("scrollMiniplayer") || "";
+for (const navigationRequirement of [
+  "let navigationInProgress = false;",
+  "if (navigationInProgress || !isEligiblePath() || isFullscreen()) return false;",
+  "if (navigationInProgress || !isEligiblePath() || scrollScheduled) return;",
+  "function startMutationObservation()",
+  "function stopMutationObservation()",
+]) {
+  assert(
+    scrollMiniplayerSource.includes(navigationRequirement),
+    `Missing Scroll Miniplayer navigation requirement: ${navigationRequirement}`,
+  );
+}
+assert.match(
+  scrollMiniplayerSource,
+  /window\.addEventListener\("yt-navigate-start", \(\) => \{\s+navigationInProgress = true;\s+deactivateImmediately\(\);/,
+  "Scroll Miniplayer must lock before navigation cleanup",
+);
+assert.match(
+  scrollMiniplayerSource,
+  /window\.addEventListener\("yt-navigate-finish", \(\) => \{\s+navigationInProgress = false;[\s\S]{0,150}?scheduleRouteSync\(\);/,
+  "Scroll Miniplayer must release its navigation lock before route sync",
+);
+assert.match(
+  scrollMiniplayerSource,
+  /window\.addEventListener\("pageshow", \(\) => \{[\s\S]{0,180}?navigationInProgress = false;[\s\S]{0,180}?scheduleRouteSync\(\);/,
+  "Scroll Miniplayer must recover its navigation lock after BFCache restore",
+);
+assert.match(
+  scrollMiniplayerSource,
+  /function syncRouteState\(\) \{[\s\S]+?if \(navigationInProgress\) \{[\s\S]+?return;\s+\}\s+if \(!isEligiblePath\(\)\) \{\s+stopMutationObservation\(\);[\s\S]+?return;\s+\}\s+startMutationObservation\(\);/,
+  "Scroll Miniplayer mutation observation must be limited to settled routes",
+);
+assert.match(
+  scrollMiniplayerSource,
+  /const mutationObserver = new MutationObserver\(\(mutations\) => \{\s+if \(navigationInProgress \|\| !isEligiblePath\(\)\) return;/,
+  "Scroll Miniplayer mutation handling must remain inert during navigation",
+);
+assert(
+  scrollMiniplayerSource.includes(
+    'url.pathname.match(/^\\/live\\/([^/?#]+)/)',
+  ),
+  "Compact queue video-ID extraction must support /live/<id> URLs",
+);
+assert(
+  scrollMiniplayerSource.includes("player?.getVideoData?.()?.video_id"),
+  "Compact queue matching must consider the active player video ID",
+);
+const compactQueueFunctionIndex = scrollMiniplayerSource.indexOf(
+  "function getCompactQueueState()",
+);
+const exactQueueMatchIndex = scrollMiniplayerSource.indexOf(
+  "(item) => getQueueItemVideoId(item) === currentVideoId",
+  compactQueueFunctionIndex,
+);
+const selectedQueueMatchIndex = scrollMiniplayerSource.indexOf(
+  'item.hasAttribute("selected")',
+  compactQueueFunctionIndex,
+);
+assert(
+  compactQueueFunctionIndex !== -1 &&
+    exactQueueMatchIndex > compactQueueFunctionIndex &&
+    selectedQueueMatchIndex > exactQueueMatchIndex,
+  "Compact queue must prefer an exact URL/player video-ID match",
+);
+
+const playerPreferencesSource =
+  canonicalSources.get("playerPreferencesLite") || "";
+for (const layoutRefreshRequirement of [
+  "const PLAYER_LAYOUT_REFRESH_DELAYS_MS = [0, 100, 500, 1200];",
+  "const playerLayoutRefreshAttemptTimers = new Map();",
+  "if (playerLayoutRefreshAttemptTimers.has(delay))",
+  "playerLayoutRefreshAttemptTimers.delete(delay);",
+  "function clearPlayerLayoutRefreshAttempts()",
+  "playerLayoutRefreshAttemptTimers.clear();",
+]) {
+  assert(
+    playerPreferencesSource.includes(layoutRefreshRequirement),
+    `Missing Player Preferences retry requirement: ${layoutRefreshRequirement}`,
+  );
+}
+assert.match(
+  playerPreferencesSource,
+  /function handleNavigateStart\(\) \{\s+clearLiveChatCollapseAttempts\(\);\s+clearPlayerLayoutRefreshAttempts\(\);/,
+  "Navigation start must cancel pending player-layout retries",
+);
+const wheelHandlerIndex = playerPreferencesSource.indexOf(
+  "function handleWheelVolume(event)",
+);
+const wheelFastRejectIndex = playerPreferencesSource.indexOf(
+  "CONFIG.requireRightMouseButtonForWheelVolume &&",
+  wheelHandlerIndex,
+);
+const wheelPlayerLookupIndex = playerPreferencesSource.indexOf(
+  "const player = getPlayerFromTarget(event.target);",
+  wheelHandlerIndex,
+);
+assert(
+  wheelHandlerIndex !== -1 &&
+    wheelFastRejectIndex > wheelHandlerIndex &&
+    wheelPlayerLookupIndex > wheelFastRejectIndex,
+  "Ordinary wheel events must be rejected before player DOM lookup",
+);
 for (const selector of [
   "ytd-miniplayer",
   "ytd-playlist-panel-renderer",
@@ -329,8 +502,42 @@ assert.match(
 );
 assert.match(
   userscript,
-  /registeredModules,\s+expectedModules: EXPECTED_MODULE_COUNT,\s+healthy: registeredModules === EXPECTED_MODULE_COUNT,/,
-  "The health marker must report actual and expected module counts",
+  /const moduleStates = new Map\(\);/,
+  "The health marker must track per-module runtime state",
+);
+for (const moduleStatus of ["pending", "initialised", "disabled", "failed"]) {
+  assert(
+    userscript.includes(`status: "${moduleStatus}"`),
+    `The health marker never records ${moduleStatus} modules`,
+  );
+}
+for (const healthField of [
+  "registeredModules",
+  "enabledModules",
+  "initialisedModules",
+  "pendingModules",
+  "disabledModules",
+  "failedModules",
+  "ready",
+]) {
+  assert(
+    userscript.includes(`${healthField},`),
+    `The health marker is missing ${healthField}`,
+  );
+}
+assert(
+  userscript.includes("expectedModules: EXPECTED_MODULE_COUNT,"),
+  "The health marker is missing its expected module count",
+);
+assert.match(
+  userscript,
+  /healthy:\s+registeredModules === EXPECTED_MODULE_COUNT &&\s+ready &&\s+failedModules\.length === 0,/,
+  "The health marker must only report healthy after registration and initialisation",
+);
+assert.match(
+  userscript,
+  /endBatch\(\);\s+publishHealthMarker\(\);/,
+  "The health marker must be republished after idle module initialisation",
 );
 for (const coherenceRequirement of [
   'const STALE_ATTRIBUTE = "data-yt-master-page-stale"',
@@ -362,7 +569,7 @@ assert.equal(releaseManifest.source, "youtube-master-suite.user.js");
 assert.equal(releaseManifest.sha256, userscriptHash);
 assert.equal(releaseManifest.bytes, Buffer.byteLength(userscript, "utf8"));
 assert.equal(releaseManifest.characters, userscript.length);
-assert.equal(releaseManifest.registeredModules, 7);
+assert.equal(releaseManifest.registeredModules, expectedModuleCount);
 
 if (existsSync(manualCopyPath)) {
   assert.equal(
@@ -374,17 +581,44 @@ if (existsSync(manualCopyPath)) {
   assert.fail("The manual .txt copy is required for a maintainer release check");
 }
 
-let headUserscript = "";
+const versionComparisonRef = explicitBaseRef || "HEAD";
+if (explicitBaseRef) {
+  try {
+    git(suiteDirectory, "rev-parse", "--verify", `${explicitBaseRef}^{commit}`);
+  } catch {
+    assert.fail(`Unable to resolve --base git ref: ${explicitBaseRef}`);
+  }
+}
+
+let comparisonUserscript = "";
+let comparisonArtifactExists = false;
 try {
-  headUserscript = git(suiteDirectory, "show", "HEAD:youtube-master-suite.user.js");
+  git(
+    suiteDirectory,
+    "cat-file",
+    "-e",
+    `${versionComparisonRef}:youtube-master-suite.user.js`,
+  );
+  comparisonArtifactExists = true;
 } catch {
   // The generated artefact may not exist in the initial repository commit.
 }
-if (headUserscript && headUserscript.trimEnd() !== userscript.trimEnd()) {
-  assert.notEqual(
-    metadata(headUserscript, "version"),
-    metadata(userscript, "version"),
-    "Generated changes require a master version increase",
+if (comparisonArtifactExists) {
+  comparisonUserscript = git(
+    suiteDirectory,
+    "show",
+    `${versionComparisonRef}:youtube-master-suite.user.js`,
+  );
+}
+if (
+  comparisonUserscript &&
+  comparisonUserscript.trimEnd() !== userscript.trimEnd()
+) {
+  const comparisonVersion = metadata(comparisonUserscript, "version");
+  const currentVersion = metadata(userscript, "version");
+  assert(
+    compareVersions(currentVersion, comparisonVersion) > 0,
+    `Generated changes since ${versionComparisonRef} require a master version increase`,
   );
 }
 

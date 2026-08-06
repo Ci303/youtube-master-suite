@@ -32,10 +32,10 @@ assert.equal(
   "Unexpected manifest source",
 );
 assert.match(manifest.sha256, /^[0-9a-f]{64}$/, "Invalid manifest hash");
-assert.equal(
-  manifest.registeredModules,
-  7,
-  "Unexpected manifest module count",
+assert(
+  Number.isInteger(manifest.registeredModules) &&
+    manifest.registeredModules > 0,
+  "Manifest module count must be a positive integer",
 );
 assert.equal(
   Buffer.byteLength(installedSource, "utf8"),

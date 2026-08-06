@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -29,7 +31,17 @@ jobs:
         run: node build-master.mjs --check
 
       - name: Run repository verifier
-        run: node verify-master.mjs
+        env:
+          VERIFY_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -n "$VERIFY_BASE_REF" && ! "$VERIFY_BASE_REF" =~ ^0+$ ]]; then
+            if ! git cat-file -e "${VERIFY_BASE_REF}^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "$VERIFY_BASE_REF"
+            fi
+            node verify-master.mjs --base "$VERIFY_BASE_REF"
+          else
+            node verify-master.mjs
+          fi
 
       - name: Verify install-parity helper
         run: node verify-installed-master.mjs youtube-master-suite.user.js

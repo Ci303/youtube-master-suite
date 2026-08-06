@@ -19,8 +19,8 @@ or install it.
 | Feed UI Cleaner | 2.3 | Removes unwanted feed shelves, chips, advertisements, mixes, members-only cards, podcasts, and resulting gaps while preserving YouTube search. |
 | Miniplayer Button Restorer | 1.3 | Restores the native-style miniplayer control when YouTube omits it, while avoiding redundant installation work once attached. |
 | Page Coherence Guard | 1.0 | Detects incomplete queue navigation, hides confirmed stale metadata and comments, offers an explicit page-data reload, and publishes lightweight navigation-state diagnostics. |
-| Player Preferences Lite | 1.32 | Applies player, feed, description, live-chat, volume, quality, Shorts, and watch-page preferences without taking over YouTube's queue or native miniplayer. Keeps native like and Return YouTube Dislike counts vertically aligned. Watched-video filtering deliberately excludes Watch History. Info cards, recommendation grids, and the single autoplay up-next card have independent settings. |
-| Scroll Miniplayer | 5.7 | Floats the active watch or live player when it leaves the viewport and shows compact current-title and queue-position context while the full queue remains hidden. |
+| Player Preferences Lite | 1.33 | Applies player, feed, description, live-chat, volume, quality, Shorts, and watch-page preferences without taking over YouTube's queue or native miniplayer. Keeps native like and Return YouTube Dislike counts vertically aligned. Watched-video filtering deliberately excludes Watch History. Info cards, recommendation grids, and the single autoplay up-next card have independent settings. Layout refresh retries are coalesced, and ordinary wheel events avoid player lookup. |
+| Scroll Miniplayer | 5.8 | Floats the active watch or live player when it leaves the viewport and shows compact current-title and queue-position context while the full queue remains hidden. Navigation is locked until the new route settles, queue context follows the current watch or live video ID, and observation stops off eligible routes. |
 | Watch Layout Cleaner | 1.25 | Expands watch-page content, keeps the right rail at the SponsorBlock-friendly `374px` width, widens metadata and comments, and provides queue-thumbnail fallbacks. |
 
 The former standalone SponsorBlock Queue Width script remains superseded. Its
@@ -29,14 +29,18 @@ redundant source artefact, event listener and style element.
 
 ## Consolidation and performance design
 
-The master is generated from the seven canonical module sources in
-`sources/modules/`. It deliberately avoids concatenating independent
-userscripts unchanged.
+The master is generated from the canonical module inventory declared by
+`sources.lock.json` and matched exactly against `sources/modules/`. It
+deliberately avoids concatenating independent userscripts unchanged.
 
 - One native `MutationObserver` dispatches only the mutation records requested
   by each isolated module.
 - YouTube SPA lifecycle events are grouped so modules share native listeners
   while retaining their original capture or bubble phase.
+- Scroll Miniplayer disconnects its mutation observer and rejects scroll work
+  outside settled watch and live routes.
+- Player Preferences coalesces overlapping layout-refresh retries and rejects
+  ordinary wheel events before querying the player DOM.
 - All module CSS is rendered through one ordered stylesheet element.
 - Document-start and document-idle modules retain their original execution
   phases.
@@ -81,10 +85,16 @@ document element:
 JSON.parse(document.documentElement.getAttribute("data-yt-master-suite"))
 ```
 
-It reports the loaded master version, registered module count, expected module
-count and whether those counts match. The marker is always enabled and does not
-collect timings or observe additional DOM changes. A missing marker means the
-userscript did not reach its registration-complete stage.
+It reports the loaded master version; registered and expected module counts;
+the enabled, initialised, pending and disabled module IDs; any failed module
+IDs and bounded error messages; and `ready` and `healthy` states. `ready` is
+false while an enabled module is pending. `healthy` is true only after every
+module is registered, no enabled module is pending and no module failed. The
+marker is always enabled and does not collect timings or observe additional
+DOM changes. A missing marker means the userscript did not reach its
+registration-complete stage. This is injection and initialisation health;
+errors raised later by lifecycle or mutation callbacks remain console-reported
+and do not retroactively change the marker.
 
 ## Configuration and fault isolation
 
@@ -177,7 +187,7 @@ youtube-master-suite/
 |-- youtube-master-suite.user.js
 |-- sources/
 |   |-- modules/
-|   |   `-- <seven pinned component userscripts>
+|   |   `-- <pinned component userscripts>
 |-- .gitignore
 `-- README.md
 ```
@@ -195,8 +205,9 @@ youtube-master-suite/
   shared infrastructure, route exclusions, diagnostics defaults and the local
   manual-install copy.
 - `youtube-master-suite.user.js` is the generated, installable artefact.
-- `sources/modules/` contains the definitive, directly maintained source for
-  the seven feature modules.
+- `sources/modules/` contains the definitive, directly maintained feature
+  module sources. The build rejects missing, orphaned or duplicate inventory
+  entries.
 - `youtube-master-suite.txt` is a local manual-install copy and is deliberately
   ignored because the `.user.js` file is the canonical published artefact.
 
@@ -218,7 +229,9 @@ local `.txt` copy.
 
 Identical locked inputs produce an identical userscript and SHA-256 hash.
 GitHub Actions runs the build check, verifier and syntax checks on every push
-and pull request.
+and pull request. Its version check compares the generated artefact with the
+push-before commit or pull-request base rather than the already checked-out
+commit.
 
 ### Editing module sources
 
@@ -258,7 +271,8 @@ TampermonkeyFS is editor-centred. A permanent change should follow this flow:
 5. Let TampermonkeyFS load the changed linked file into its virtual editor.
 6. Save the virtual editor to send the same source to Tampermonkey.
 7. Read the saved script back from Tampermonkey and verify its hash, length and
-   seven module registrations against `release-manifest.json` before committing.
+   manifest-declared module registrations against `release-manifest.json`
+   before committing.
 
 For a file-backed or exported installed copy, run:
 
@@ -283,7 +297,7 @@ Before publishing a new version:
    SponsorBlock queue.
 6. Commit and push, then run `node .\verify-master.mjs --release`.
 7. Confirm the installed Tampermonkey source matches
-   `release-manifest.json`, including all seven module registrations.
+   `release-manifest.json`, including its declared module registrations.
 
 ## Compatibility and limitations
 

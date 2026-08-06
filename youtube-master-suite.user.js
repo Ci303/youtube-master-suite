@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.19
+// @version      0.1.20
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -23,14 +23,14 @@
 //   Feed UI Cleaner v2.3 | sources/modules/youtube-feed-ui-cleaner.user.js | sha256:7e3d357af994e20ce61fdd717732403f1d1fba9273f109ea17d7c82608b21b69
 //   Miniplayer Button Restorer v1.3 | sources/modules/youtube-miniplayer-button-restorer.user.js | sha256:fb9ed1668ea8c4e06c45e713800c17a10dd67e5e2e106d46f609b6e6d5cd5de1
 //   Page Coherence Guard v1.0 | sources/modules/youtube-page-coherence.user.js | sha256:6345c396147a8c70400c6a9f9d323c75d443e5a0bb995a10f4fbd84b7571eb2c
-//   Player Preferences Lite v1.32 | sources/modules/youtube-player-preferences-lite.user.js | sha256:c46aa279bb9a13573963c1a8c15d906e670bc3904aa59fa8116d44769db586ef
-//   Scroll Miniplayer v5.7 | sources/modules/youtube-scroll-miniplayer.user.js | sha256:f97088457a6eab644ed66794fb68c91b71e88b081772e37d0e7f06edbc6fd582
+//   Player Preferences Lite v1.33 | sources/modules/youtube-player-preferences-lite.user.js | sha256:2f8dc74c993f6b7185c221491a08f15b99b3999f6058b528074f1da3e4eb51b6
+//   Scroll Miniplayer v5.8 | sources/modules/youtube-scroll-miniplayer.user.js | sha256:e5ba2b1fdc43efc1d0a4202cdd0259242f4b5c01904f96584abc771e21f861c2
 //   Watch Layout Cleaner v1.25 | sources/modules/youtube-watch-layout-cleaner.user.js | sha256:bcf15f6e55f62a3d012de72d28875fd5a6b69686e0bbf269653a392910df9fc8
 
 (() => {
   "use strict";
 
-  const MASTER_VERSION = "0.1.19";
+  const MASTER_VERSION = "0.1.20";
   const EXPECTED_MODULE_COUNT = 7;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -69,6 +69,7 @@
   const styleParts = new Map();
   const idleModules = [];
   const registeredModuleIds = new Set();
+  const moduleStates = new Map();
   const diagnosticStats = new Map();
   let nativeMutationObserver = null;
   let styleElement = null;
@@ -387,12 +388,20 @@
   }
 
   function executeModule(id, label, initialise) {
-    if (!ENABLED_MODULES[id]) return;
+    if (!ENABLED_MODULES[id]) {
+      moduleStates.set(id, { status: "disabled" });
+      return;
+    }
     const previousModuleId = activeModuleId;
     activeModuleId = id;
     try {
       runWithDiagnostics(id, "initialise", 1, initialise);
+      moduleStates.set(id, { status: "initialised" });
     } catch (error) {
+      moduleStates.set(id, {
+        status: "failed",
+        error: String(error?.message || error).slice(0, 500),
+      });
       reportModuleError(label, error);
     } finally {
       activeModuleId = previousModuleId;
@@ -407,6 +416,9 @@
       throw new Error(`Duplicate module registration: ${id}`);
     }
     registeredModuleIds.add(id);
+    moduleStates.set(id, {
+      status: ENABLED_MODULES[id] ? "pending" : "disabled",
+    });
 
     if (phase === "document-start") {
       executeModule(id, label, initialise);
@@ -424,6 +436,7 @@
         );
       } finally {
         endBatch();
+        publishHealthMarker();
       }
     };
 
@@ -439,13 +452,38 @@
     if (!root) return false;
 
     const registeredModules = registeredModuleIds.size;
+    const states = [...registeredModuleIds].map((id) => ({
+      id,
+      ...(moduleStates.get(id) || { status: "pending" }),
+    }));
+    const moduleIdsWithStatus = (status) =>
+      states.filter((entry) => entry.status === status).map(({ id }) => id);
+    const enabledModules = states
+      .filter((entry) => entry.status !== "disabled")
+      .map(({ id }) => id);
+    const initialisedModules = moduleIdsWithStatus("initialised");
+    const pendingModules = moduleIdsWithStatus("pending");
+    const disabledModules = moduleIdsWithStatus("disabled");
+    const failedModules = states
+      .filter((entry) => entry.status === "failed")
+      .map(({ id, error }) => ({ id, error }));
+    const ready = pendingModules.length === 0;
     root.setAttribute(
       HEALTH_ATTRIBUTE,
       JSON.stringify({
         version: MASTER_VERSION,
         registeredModules,
         expectedModules: EXPECTED_MODULE_COUNT,
-        healthy: registeredModules === EXPECTED_MODULE_COUNT,
+        enabledModules,
+        initialisedModules,
+        pendingModules,
+        disabledModules,
+        failedModules,
+        ready,
+        healthy:
+          registeredModules === EXPECTED_MODULE_COUNT &&
+          ready &&
+          failedModules.length === 0,
       }),
     );
     return true;
@@ -2106,7 +2144,7 @@
 
   suite.registerModule(
     "playerPreferencesLite",
-    "Player Preferences Lite v1.32",
+    "Player Preferences Lite v1.33",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -2408,6 +2446,7 @@
           "small",
           "tiny",
         ];
+        const PLAYER_LAYOUT_REFRESH_DELAYS_MS = [0, 100, 500, 1200];
 
         let scheduled = false;
         const pendingApplyRoots = new Set();
@@ -2417,6 +2456,7 @@
         let highestQualityRetryTimers = [];
         let theaterModeAttemptKey = "";
         let playerLayoutRefreshScheduled = false;
+        const playerLayoutRefreshAttemptTimers = new Map();
         let liveChatCollapseAttemptTimers = [];
         let liveChatCollapsePendingTimer = 0;
         let pendingLiveChatFrame = null;
@@ -4334,9 +4374,24 @@
             return;
           }
 
-          [0, 100, 500, 1200].forEach((delay) => {
-            setTimeout(requestPlayerLayoutRefresh, delay);
+          PLAYER_LAYOUT_REFRESH_DELAYS_MS.forEach((delay) => {
+            if (playerLayoutRefreshAttemptTimers.has(delay)) {
+              return;
+            }
+
+            const timerId = setTimeout(() => {
+              playerLayoutRefreshAttemptTimers.delete(delay);
+              requestPlayerLayoutRefresh();
+            }, delay);
+            playerLayoutRefreshAttemptTimers.set(delay, timerId);
           });
+        }
+
+        function clearPlayerLayoutRefreshAttempts() {
+          playerLayoutRefreshAttemptTimers.forEach((timerId) =>
+            clearTimeout(timerId),
+          );
+          playerLayoutRefreshAttemptTimers.clear();
         }
 
         function isLiveChatCollapsed(chatFrame) {
@@ -4686,14 +4741,16 @@
             return;
           }
 
-          const player = getPlayerFromTarget(event.target);
-          if (!player) {
+          if (
+            CONFIG.requireRightMouseButtonForWheelVolume &&
+            (event.buttons & 2) !== 2 &&
+            !rightButtonHeldOnPlayer
+          ) {
             return;
           }
 
-          const rightButtonPressed =
-            (event.buttons & 2) === 2 || rightButtonHeldOnPlayer;
-          if (CONFIG.requireRightMouseButtonForWheelVolume && !rightButtonPressed) {
+          const player = getPlayerFromTarget(event.target);
+          if (!player) {
             return;
           }
 
@@ -4786,6 +4843,11 @@
           theaterModeAttemptKey = "";
           applyRoutePreferences();
           schedulePlayerLayoutRefreshAttempts();
+        }
+
+        function handleNavigateStart() {
+          clearLiveChatCollapseAttempts();
+          clearPlayerLayoutRefreshAttempts();
         }
 
         function handleDescriptionClick(event) {
@@ -4994,11 +5056,7 @@
         document.addEventListener("contextmenu", handleContextMenu, true);
 
         suite.addWindowListener("blur", handleWindowBlur, true);
-        suite.addWindowListener(
-          "yt-navigate-start",
-          clearLiveChatCollapseAttempts,
-          true,
-        );
+        suite.addWindowListener("yt-navigate-start", handleNavigateStart, true);
         suite.addWindowListener("yt-navigate-finish", handleNavigateFinish, true);
         suite.addWindowListener(
           "yt-page-data-updated",
@@ -5022,7 +5080,7 @@
 
   suite.registerModule(
     "scrollMiniplayer",
-    "Scroll Miniplayer v5.7",
+    "Scroll Miniplayer v5.8",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -5110,6 +5168,8 @@
         let queueInfoScheduled = false;
         let fadeOutTimer = 0;
         let suppressedUntilVisible = false;
+        let navigationInProgress = false;
+        let mutationObserverActive = false;
         let floatedPlayer = null;
         let playerPlaceholder = null;
         let restoreParent = null;
@@ -5571,16 +5631,24 @@
           return String(value || "").replace(/\s+/g, " ").trim();
         }
 
-        function getQueueItemVideoId(item) {
-          const link = item && item.querySelector('a[href*="/watch"]');
-          if (!link) return "";
-
+        function getVideoIdFromUrl(value) {
           try {
-            return new URL(link.href || link.getAttribute("href"), location.origin)
-              .searchParams.get("v") || "";
+            const url = new URL(value || "", location.origin);
+            const watchVideoId = url.pathname === "/watch"
+              ? url.searchParams.get("v") || ""
+              : "";
+            if (watchVideoId) return watchVideoId;
+
+            const liveMatch = url.pathname.match(/^\/live\/([^/?#]+)/);
+            return liveMatch ? decodeURIComponent(liveMatch[1]) : "";
           } catch {
             return "";
           }
+        }
+
+        function getQueueItemVideoId(item) {
+          const link = item && item.querySelector('a[href*="/watch"], a[href*="/live/"]');
+          return link ? getVideoIdFromUrl(link.href || link.getAttribute("href")) : "";
         }
 
         function getCompactQueueState() {
@@ -5592,16 +5660,34 @@
           const items = Array.from(panel.querySelectorAll(QUEUE_ITEM_SELECTOR));
           if (!items.length) return null;
 
-          const currentVideoId = new URL(location.href).searchParams.get("v") || "";
-          let currentItem = items.find((item) =>
-            item.hasAttribute("selected") ||
-            item.getAttribute("aria-current") === "true" ||
-            item.classList.contains("selected") ||
-            Boolean(item.querySelector('[aria-current="true"]'))
+          const player = getPlayer();
+          let playerVideoId = "";
+          try {
+            playerVideoId = normaliseText(player?.getVideoData?.()?.video_id);
+          } catch {
+            // YouTube can replace the player API while navigating.
+          }
+
+          const currentVideoIds = [
+            getVideoIdFromUrl(location.href),
+            playerVideoId,
+          ].filter((videoId, index, videoIds) =>
+            Boolean(videoId) && videoIds.indexOf(videoId) === index
           );
-          if (!currentItem && currentVideoId) {
+          let currentItem = null;
+          for (const currentVideoId of currentVideoIds) {
             currentItem = items.find(
               (item) => getQueueItemVideoId(item) === currentVideoId,
+            );
+            if (currentItem) break;
+          }
+          const matchedCurrentVideoId = Boolean(currentItem);
+          if (!currentItem) {
+            currentItem = items.find((item) =>
+              item.hasAttribute("selected") ||
+              item.getAttribute("aria-current") === "true" ||
+              item.classList.contains("selected") ||
+              Boolean(item.querySelector('[aria-current="true"]'))
             );
           }
 
@@ -5612,7 +5698,9 @@
           let index = currentItem ? items.indexOf(currentItem) + 1 : 0;
           let total = items.length;
           if (indexMatch) {
-            index = Number(indexMatch[1]) || index;
+            if (!matchedCurrentVideoId) {
+              index = Number(indexMatch[1]) || index;
+            }
             total = Number(indexMatch[2]) || total;
           }
           if (!currentItem && index > 0) {
@@ -5771,7 +5859,7 @@
         }
 
         function shouldFloatFromScroll() {
-          if (!isEligiblePath() || isFullscreen()) return false;
+          if (navigationInProgress || !isEligiblePath() || isFullscreen()) return false;
 
           const anchor = getTriggerAnchor();
           if (!anchor) return false;
@@ -5805,7 +5893,7 @@
         }
 
         function scheduleScrollSync() {
-          if (scrollScheduled) return;
+          if (navigationInProgress || !isEligiblePath() || scrollScheduled) return;
 
           scrollScheduled = true;
           requestAnimationFrame(syncScrollState);
@@ -5814,12 +5902,20 @@
         function syncRouteState() {
           routeScheduled = false;
 
-          if (!isEligiblePath()) {
+          if (navigationInProgress) {
             suppressedUntilVisible = false;
             setActive(false);
             return;
           }
 
+          if (!isEligiblePath()) {
+            stopMutationObservation();
+            suppressedUntilVisible = false;
+            setActive(false);
+            return;
+          }
+
+          startMutationObservation();
           ensureStyles();
           if (isBodyActive()) {
             scheduleCompactQueueInfoSync();
@@ -5835,7 +5931,7 @@
         }
 
         const mutationObserver = new MutationObserver((mutations) => {
-          if (!isEligiblePath()) return;
+          if (navigationInProgress || !isEligiblePath()) return;
 
           if (
             isBodyActive() &&
@@ -5868,6 +5964,25 @@
           }
         });
 
+        function startMutationObservation() {
+          if (mutationObserverActive || navigationInProgress || !isEligiblePath()) return;
+
+          mutationObserver.observe(document.documentElement, {
+            attributeFilter: ["aria-current", "selected"],
+            attributes: true,
+            childList: true,
+            subtree: true,
+          });
+          mutationObserverActive = true;
+        }
+
+        function stopMutationObservation() {
+          if (!mutationObserverActive) return;
+
+          mutationObserver.disconnect();
+          mutationObserverActive = false;
+        }
+
         suite.addWindowListener("resize", () => {
           if (isBodyActive()) {
             setBodyBoxVars();
@@ -5888,20 +6003,23 @@
           }
         }, true);
 
-        suite.addWindowListener("yt-navigate-start", deactivateImmediately, true);
+        suite.addWindowListener("yt-navigate-start", () => {
+          navigationInProgress = true;
+          deactivateImmediately();
+        }, true);
         suite.addWindowListener("yt-navigate-finish", () => {
+          navigationInProgress = false;
           suppressedUntilVisible = false;
           scheduleRouteSync();
         }, true);
         suite.addWindowListener("yt-page-data-updated", scheduleRouteSync, true);
-        suite.addWindowListener("pageshow", scheduleRouteSync, true);
+        suite.addWindowListener("pageshow", () => {
+          // A BFCache restore may not emit a matching YouTube navigation finish.
+          navigationInProgress = false;
+          suppressedUntilVisible = false;
+          scheduleRouteSync();
+        }, true);
 
-        mutationObserver.observe(document.documentElement, {
-          attributeFilter: ["aria-current", "selected"],
-          attributes: true,
-          childList: true,
-          subtree: true,
-        });
         syncRouteState();
     },
   );

@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MASTER_VERSION = "0.1.19";
+const MASTER_VERSION = "0.1.20";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const outputPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const releaseManifestPath = join(suiteDirectory, "release-manifest.json");
@@ -51,6 +51,56 @@ const modules = [
     phase: "document-start",
   },
 ];
+
+function canonicalSourcePaths() {
+  return readdirSync(join(suiteDirectory, "sources", "modules"), {
+    withFileTypes: true,
+  })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".user.js"))
+    .map((entry) => `sources/modules/${entry.name}`)
+    .sort();
+}
+
+function assertSameValues(actualValues, expectedValues, description) {
+  const actual = [...actualValues].sort();
+  const expected = [...expectedValues].sort();
+  if (
+    actual.length !== expected.length ||
+    actual.some((value, index) => value !== expected[index])
+  ) {
+    throw new Error(
+      `${description}: expected [${expected.join(", ")}], ` +
+        `found [${actual.join(", ")}]`,
+    );
+  }
+}
+
+function validateCanonicalInventory() {
+  const moduleIds = modules.map(({ id }) => id);
+  if (new Set(moduleIds).size !== moduleIds.length) {
+    throw new Error("The build module registry contains duplicate IDs");
+  }
+
+  const lockedModules = Object.entries(sourceLock.modules || {});
+  const lockedIds = lockedModules.map(([id]) => id);
+  assertSameValues(
+    lockedIds,
+    moduleIds,
+    "Build registry and source-lock IDs differ",
+  );
+
+  const lockedPaths = lockedModules.map(([, lockedSource]) => lockedSource.path);
+  if (new Set(lockedPaths).size !== lockedPaths.length) {
+    throw new Error("The source lock contains duplicate canonical source paths");
+  }
+  assertSameValues(
+    lockedPaths,
+    canonicalSourcePaths(),
+    "Source lock and canonical module directory differ",
+  );
+}
+
+validateCanonicalInventory();
 
 function normaliseNewlines(value) {
   return value.replace(/\r\n/g, "\n");
@@ -218,8 +268,8 @@ const consolidatedWatchLayoutSidebarCss = [
 ].join("\n");
 
 function transformModuleBody(moduleDefinition, body) {
-  let transformed = body.replaceAll(
-    "window.addEventListener(",
+  let transformed = body.replace(
+    /\bwindow\s*\.\s*addEventListener\s*\(/g,
     "suite.addWindowListener(",
   );
 
@@ -290,10 +340,14 @@ function transformModuleBody(moduleDefinition, body) {
     );
   }
 
-  if (transformed.includes("window.addEventListener(")) {
+  if (/\bwindow\s*\.\s*addEventListener\s*\(/.test(transformed)) {
     throw new Error(`${moduleDefinition.source}: window listener transform failed`);
   }
-  if (transformed.includes('document.createElement("style")')) {
+  if (
+    /\bdocument\s*\.\s*createElement\s*\(\s*["']style["']\s*\)/.test(
+      transformed,
+    )
+  ) {
     throw new Error(`${moduleDefinition.source}: stylesheet transform incomplete`);
   }
 
@@ -405,6 +459,7 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
   const styleParts = new Map();
   const idleModules = [];
   const registeredModuleIds = new Set();
+  const moduleStates = new Map();
   const diagnosticStats = new Map();
   let nativeMutationObserver = null;
   let styleElement = null;
@@ -723,12 +778,20 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
   }
 
   function executeModule(id, label, initialise) {
-    if (!ENABLED_MODULES[id]) return;
+    if (!ENABLED_MODULES[id]) {
+      moduleStates.set(id, { status: "disabled" });
+      return;
+    }
     const previousModuleId = activeModuleId;
     activeModuleId = id;
     try {
       runWithDiagnostics(id, "initialise", 1, initialise);
+      moduleStates.set(id, { status: "initialised" });
     } catch (error) {
+      moduleStates.set(id, {
+        status: "failed",
+        error: String(error?.message || error).slice(0, 500),
+      });
       reportModuleError(label, error);
     } finally {
       activeModuleId = previousModuleId;
@@ -743,6 +806,9 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
       throw new Error(\`Duplicate module registration: \${id}\`);
     }
     registeredModuleIds.add(id);
+    moduleStates.set(id, {
+      status: ENABLED_MODULES[id] ? "pending" : "disabled",
+    });
 
     if (phase === "document-start") {
       executeModule(id, label, initialise);
@@ -760,6 +826,7 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
         );
       } finally {
         endBatch();
+        publishHealthMarker();
       }
     };
 
@@ -775,13 +842,38 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
     if (!root) return false;
 
     const registeredModules = registeredModuleIds.size;
+    const states = [...registeredModuleIds].map((id) => ({
+      id,
+      ...(moduleStates.get(id) || { status: "pending" }),
+    }));
+    const moduleIdsWithStatus = (status) =>
+      states.filter((entry) => entry.status === status).map(({ id }) => id);
+    const enabledModules = states
+      .filter((entry) => entry.status !== "disabled")
+      .map(({ id }) => id);
+    const initialisedModules = moduleIdsWithStatus("initialised");
+    const pendingModules = moduleIdsWithStatus("pending");
+    const disabledModules = moduleIdsWithStatus("disabled");
+    const failedModules = states
+      .filter((entry) => entry.status === "failed")
+      .map(({ id, error }) => ({ id, error }));
+    const ready = pendingModules.length === 0;
     root.setAttribute(
       HEALTH_ATTRIBUTE,
       JSON.stringify({
         version: MASTER_VERSION,
         registeredModules,
         expectedModules: EXPECTED_MODULE_COUNT,
-        healthy: registeredModules === EXPECTED_MODULE_COUNT,
+        enabledModules,
+        initialisedModules,
+        pendingModules,
+        disabledModules,
+        failedModules,
+        ready,
+        healthy:
+          registeredModules === EXPECTED_MODULE_COUNT &&
+          ready &&
+          failedModules.length === 0,
       }),
     );
     return true;

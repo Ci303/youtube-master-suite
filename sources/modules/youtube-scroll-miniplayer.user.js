@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Scroll Miniplayer
 // @namespace    Citizen.youtube.scroll-miniplayer
-// @version      5.7
+// @version      5.8
 // @description  Floats the active YouTube player with compact queue context when the watch/live player scrolls out of view.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-scroll-miniplayer
@@ -97,6 +97,8 @@
   let queueInfoScheduled = false;
   let fadeOutTimer = 0;
   let suppressedUntilVisible = false;
+  let navigationInProgress = false;
+  let mutationObserverActive = false;
   let floatedPlayer = null;
   let playerPlaceholder = null;
   let restoreParent = null;
@@ -564,16 +566,24 @@
     return String(value || "").replace(/\s+/g, " ").trim();
   }
 
-  function getQueueItemVideoId(item) {
-    const link = item && item.querySelector('a[href*="/watch"]');
-    if (!link) return "";
-
+  function getVideoIdFromUrl(value) {
     try {
-      return new URL(link.href || link.getAttribute("href"), location.origin)
-        .searchParams.get("v") || "";
+      const url = new URL(value || "", location.origin);
+      const watchVideoId = url.pathname === "/watch"
+        ? url.searchParams.get("v") || ""
+        : "";
+      if (watchVideoId) return watchVideoId;
+
+      const liveMatch = url.pathname.match(/^\/live\/([^/?#]+)/);
+      return liveMatch ? decodeURIComponent(liveMatch[1]) : "";
     } catch {
       return "";
     }
+  }
+
+  function getQueueItemVideoId(item) {
+    const link = item && item.querySelector('a[href*="/watch"], a[href*="/live/"]');
+    return link ? getVideoIdFromUrl(link.href || link.getAttribute("href")) : "";
   }
 
   function getCompactQueueState() {
@@ -585,16 +595,34 @@
     const items = Array.from(panel.querySelectorAll(QUEUE_ITEM_SELECTOR));
     if (!items.length) return null;
 
-    const currentVideoId = new URL(location.href).searchParams.get("v") || "";
-    let currentItem = items.find((item) =>
-      item.hasAttribute("selected") ||
-      item.getAttribute("aria-current") === "true" ||
-      item.classList.contains("selected") ||
-      Boolean(item.querySelector('[aria-current="true"]'))
+    const player = getPlayer();
+    let playerVideoId = "";
+    try {
+      playerVideoId = normaliseText(player?.getVideoData?.()?.video_id);
+    } catch {
+      // YouTube can replace the player API while navigating.
+    }
+
+    const currentVideoIds = [
+      getVideoIdFromUrl(location.href),
+      playerVideoId,
+    ].filter((videoId, index, videoIds) =>
+      Boolean(videoId) && videoIds.indexOf(videoId) === index
     );
-    if (!currentItem && currentVideoId) {
+    let currentItem = null;
+    for (const currentVideoId of currentVideoIds) {
       currentItem = items.find(
         (item) => getQueueItemVideoId(item) === currentVideoId,
+      );
+      if (currentItem) break;
+    }
+    const matchedCurrentVideoId = Boolean(currentItem);
+    if (!currentItem) {
+      currentItem = items.find((item) =>
+        item.hasAttribute("selected") ||
+        item.getAttribute("aria-current") === "true" ||
+        item.classList.contains("selected") ||
+        Boolean(item.querySelector('[aria-current="true"]'))
       );
     }
 
@@ -605,7 +633,9 @@
     let index = currentItem ? items.indexOf(currentItem) + 1 : 0;
     let total = items.length;
     if (indexMatch) {
-      index = Number(indexMatch[1]) || index;
+      if (!matchedCurrentVideoId) {
+        index = Number(indexMatch[1]) || index;
+      }
       total = Number(indexMatch[2]) || total;
     }
     if (!currentItem && index > 0) {
@@ -764,7 +794,7 @@
   }
 
   function shouldFloatFromScroll() {
-    if (!isEligiblePath() || isFullscreen()) return false;
+    if (navigationInProgress || !isEligiblePath() || isFullscreen()) return false;
 
     const anchor = getTriggerAnchor();
     if (!anchor) return false;
@@ -798,7 +828,7 @@
   }
 
   function scheduleScrollSync() {
-    if (scrollScheduled) return;
+    if (navigationInProgress || !isEligiblePath() || scrollScheduled) return;
 
     scrollScheduled = true;
     requestAnimationFrame(syncScrollState);
@@ -807,12 +837,20 @@
   function syncRouteState() {
     routeScheduled = false;
 
-    if (!isEligiblePath()) {
+    if (navigationInProgress) {
       suppressedUntilVisible = false;
       setActive(false);
       return;
     }
 
+    if (!isEligiblePath()) {
+      stopMutationObservation();
+      suppressedUntilVisible = false;
+      setActive(false);
+      return;
+    }
+
+    startMutationObservation();
     ensureStyles();
     if (isBodyActive()) {
       scheduleCompactQueueInfoSync();
@@ -828,7 +866,7 @@
   }
 
   const mutationObserver = new MutationObserver((mutations) => {
-    if (!isEligiblePath()) return;
+    if (navigationInProgress || !isEligiblePath()) return;
 
     if (
       isBodyActive() &&
@@ -861,6 +899,25 @@
     }
   });
 
+  function startMutationObservation() {
+    if (mutationObserverActive || navigationInProgress || !isEligiblePath()) return;
+
+    mutationObserver.observe(document.documentElement, {
+      attributeFilter: ["aria-current", "selected"],
+      attributes: true,
+      childList: true,
+      subtree: true,
+    });
+    mutationObserverActive = true;
+  }
+
+  function stopMutationObservation() {
+    if (!mutationObserverActive) return;
+
+    mutationObserver.disconnect();
+    mutationObserverActive = false;
+  }
+
   window.addEventListener("resize", () => {
     if (isBodyActive()) {
       setBodyBoxVars();
@@ -881,19 +938,22 @@
     }
   }, true);
 
-  window.addEventListener("yt-navigate-start", deactivateImmediately, true);
+  window.addEventListener("yt-navigate-start", () => {
+    navigationInProgress = true;
+    deactivateImmediately();
+  }, true);
   window.addEventListener("yt-navigate-finish", () => {
+    navigationInProgress = false;
     suppressedUntilVisible = false;
     scheduleRouteSync();
   }, true);
   window.addEventListener("yt-page-data-updated", scheduleRouteSync, true);
-  window.addEventListener("pageshow", scheduleRouteSync, true);
+  window.addEventListener("pageshow", () => {
+    // A BFCache restore may not emit a matching YouTube navigation finish.
+    navigationInProgress = false;
+    suppressedUntilVisible = false;
+    scheduleRouteSync();
+  }, true);
 
-  mutationObserver.observe(document.documentElement, {
-    attributeFilter: ["aria-current", "selected"],
-    attributes: true,
-    childList: true,
-    subtree: true,
-  });
   syncRouteState();
 })();
