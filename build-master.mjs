@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MASTER_VERSION = "0.1.21";
+const MASTER_VERSION = "0.1.29";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const outputPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const releaseManifestPath = join(suiteDirectory, "release-manifest.json");
@@ -25,6 +25,238 @@ function parseBuildArguments(arguments_) {
   return {
     checkOnly: arguments_[0] === "--check",
     selfTestMode: arguments_[0] === "--self-test",
+  };
+}
+
+function mutationOptionsCover(availableOptions, requestedOptions) {
+  for (const optionName of [
+    "attributes",
+    "attributeOldValue",
+    "childList",
+    "characterData",
+    "characterDataOldValue",
+    "subtree",
+  ]) {
+    if (requestedOptions[optionName] && !availableOptions[optionName]) {
+      return false;
+    }
+  }
+
+  if (!requestedOptions.attributes) return true;
+
+  const availableFilter = availableOptions.attributeFilter;
+  const requestedFilter = requestedOptions.attributeFilter;
+  if (!requestedFilter?.length) return !availableFilter?.length;
+  if (!availableFilter?.length) return true;
+  return requestedFilter.every((attributeName) =>
+    availableFilter.includes(attributeName),
+  );
+}
+
+function mutationCoverageCovers(availableCoverage, requestedCoverage) {
+  if (
+    !availableCoverage ||
+    !requestedCoverage ||
+    !mutationOptionsCover(
+      availableCoverage.options,
+      requestedCoverage.options,
+    )
+  ) {
+    return false;
+  }
+
+  const retainedTargets = new Set();
+  for (const requestedTarget of requestedCoverage.targets) {
+    if (availableCoverage.targets.has(requestedTarget)) {
+      retainedTargets.add(requestedTarget);
+      continue;
+    }
+
+    const coveringTarget = availableCoverage.options.subtree
+      ? [...availableCoverage.targets].find(
+          (availableTarget) =>
+            typeof availableTarget?.contains === "function" &&
+            availableTarget.contains(requestedTarget),
+        )
+      : null;
+    if (!coveringTarget) return false;
+    retainedTargets.add(coveringTarget);
+  }
+
+  for (const availableTarget of availableCoverage.targets) {
+    if (retainedTargets.has(availableTarget)) continue;
+    if (
+      !requestedCoverage.options.subtree ||
+      ![...requestedCoverage.targets].some(
+        (requestedTarget) =>
+          typeof requestedTarget?.contains === "function" &&
+          requestedTarget.contains(availableTarget),
+      )
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function normaliseMutationOptions(options = {}) {
+  options ??= {};
+  const normalisedOptions = {
+    ...options,
+    attributes: Boolean(options.attributes),
+    attributeOldValue: Boolean(options.attributeOldValue),
+    childList: Boolean(options.childList),
+    characterData: Boolean(options.characterData),
+    characterDataOldValue: Boolean(options.characterDataOldValue),
+    subtree: Boolean(options.subtree),
+  };
+
+  if (
+    options.attributes === undefined &&
+    (options.attributeOldValue !== undefined ||
+      options.attributeFilter !== undefined)
+  ) {
+    normalisedOptions.attributes = true;
+  }
+  if (
+    options.characterData === undefined &&
+    options.characterDataOldValue !== undefined
+  ) {
+    normalisedOptions.characterData = true;
+  }
+  if (options.attributeFilter !== undefined) {
+    normalisedOptions.attributeFilter = [...options.attributeFilter].map(String);
+  } else {
+    delete normalisedOptions.attributeFilter;
+  }
+
+  if (
+    !normalisedOptions.attributes &&
+    !normalisedOptions.childList &&
+    !normalisedOptions.characterData
+  ) {
+    throw new TypeError(
+      "MutationObserver options must enable attributes, childList, or characterData",
+    );
+  }
+  if (
+    !normalisedOptions.attributes &&
+    (normalisedOptions.attributeOldValue ||
+      options.attributeFilter !== undefined)
+  ) {
+    throw new TypeError(
+      "MutationObserver attribute options require attributes to be enabled",
+    );
+  }
+  if (
+    !normalisedOptions.characterData &&
+    normalisedOptions.characterDataOldValue
+  ) {
+    throw new TypeError(
+      "MutationObserver characterDataOldValue requires characterData",
+    );
+  }
+
+  return normalisedOptions;
+}
+
+function setLogicalMutationRegistration(registrations, target, options) {
+  registrations.set(target, normaliseMutationOptions(options));
+}
+
+function clearLogicalMutationRegistrations(registrations) {
+  registrations.clear();
+}
+
+function cloneLogicalMutationRegistrations(registrations) {
+  return new Map(
+    [...registrations].map(([target, options]) => [
+      target,
+      {
+        ...options,
+        ...(options.attributeFilter
+          ? { attributeFilter: [...options.attributeFilter] }
+          : {}),
+      },
+    ]),
+  );
+}
+
+function mutationMatchesRegistrations(
+  registrations,
+  mutation,
+  ignoredAttributeName,
+) {
+  if (
+    mutation.type === "attributes" &&
+    mutation.attributeName === ignoredAttributeName
+  ) {
+    return false;
+  }
+
+  for (const [target, options] of registrations) {
+    if (
+      mutation.target !== target &&
+      (!options.subtree || !target.contains(mutation.target))
+    ) {
+      continue;
+    }
+
+    if (mutation.type === "childList" && options.childList) return true;
+    if (mutation.type === "characterData" && options.characterData) return true;
+    if (
+      mutation.type === "attributes" &&
+      options.attributes &&
+      (!options.attributeFilter ||
+        options.attributeFilter.includes(mutation.attributeName))
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function buildMutationCoverage(activeObservers) {
+  const registrations = activeObservers.flatMap((observer) =>
+    [...observer.registrations].map(([target, options]) => ({
+      target,
+      options,
+    })),
+  );
+  const attributes = registrations.some(({ options }) => options.attributes);
+  const observeAllAttributes = registrations.some(
+    ({ options }) => options.attributes && !options.attributeFilter,
+  );
+  const attributeFilter = observeAllAttributes
+    ? undefined
+    : [
+        ...new Set(
+          registrations.flatMap(
+            ({ options }) => options.attributeFilter || [],
+          ),
+        ),
+      ];
+  const options = {
+    attributes,
+    attributeOldValue: registrations.some(
+      ({ options }) => options.attributeOldValue,
+    ),
+    childList: registrations.some(({ options }) => options.childList),
+    characterData: registrations.some(({ options }) => options.characterData),
+    characterDataOldValue: registrations.some(
+      ({ options }) => options.characterDataOldValue,
+    ),
+    subtree: registrations.some(({ options }) => options.subtree),
+  };
+  if (attributes && attributeFilter?.length) {
+    options.attributeFilter = attributeFilter;
+  }
+
+  return {
+    options,
+    targets: new Set(registrations.map(({ target }) => target)),
   };
 }
 
@@ -286,6 +518,13 @@ const consolidatedWatchLayoutSidebarCss = [
   '    min-width: ${px(CONFIG.sidebarWidthPx)} !important;',
   '    max-width: ${px(CONFIG.sidebarWidthPx)} !important;',
   "  }",
+  "",
+  '  ${TWO_COLUMN_WATCH_FLEXY_SELECTORS.map((watchSelector) => `${watchSelector}[${EMPTY_SECONDARY_RAIL_ATTRIBUTE}="1"] #secondary.ytd-watch-flexy`).join(",\\n  ")}{',
+  "    flex: 0 0 0 !important;",
+  "    width: 0 !important;",
+  "    min-width: 0 !important;",
+  "    max-width: 0 !important;",
+  "  }",
   "}",
 ].join("\n");
 
@@ -429,6 +668,204 @@ function runTransformSelfTests() {
     throw new Error("Stylesheet residual-guard self-test failed");
   }
 
+  const descendantTarget = { contains: () => false };
+  const unrelatedTarget = { contains: () => false };
+  const rootTarget = {
+    contains: (target) => target === descendantTarget,
+  };
+  const broadCoverage = {
+    targets: new Set([rootTarget, descendantTarget]),
+    options: {
+      attributes: true,
+      childList: true,
+      characterData: true,
+      subtree: true,
+    },
+  };
+  const narrowerCoverage = {
+    targets: new Set([rootTarget]),
+    options: {
+      attributes: true,
+      attributeFilter: ["class", "style"],
+      childList: true,
+      characterData: false,
+      subtree: true,
+    },
+  };
+  if (!mutationCoverageCovers(broadCoverage, narrowerCoverage)) {
+    throw new Error("Mutation coverage shrink self-test failed");
+  }
+  if (
+    !mutationCoverageCovers(
+      {
+        ...broadCoverage,
+        targets: new Set([rootTarget]),
+      },
+      {
+        ...narrowerCoverage,
+        targets: new Set([descendantTarget]),
+      },
+    )
+  ) {
+    throw new Error("Mutation ancestor coverage self-test failed");
+  }
+  if (
+    mutationCoverageCovers(
+      {
+        targets: new Set([rootTarget]),
+        options: {
+          attributes: true,
+          attributeFilter: ["class"],
+          childList: true,
+          characterData: false,
+          subtree: true,
+        },
+      },
+      narrowerCoverage,
+    )
+  ) {
+    throw new Error("Mutation attribute expansion self-test failed");
+  }
+  if (
+    mutationCoverageCovers(broadCoverage, {
+      ...narrowerCoverage,
+      targets: new Set([unrelatedTarget]),
+    })
+  ) {
+    throw new Error("Mutation target expansion self-test failed");
+  }
+
+  const registrations = new Map();
+  const rootAttributeFilter = ["class"];
+  setLogicalMutationRegistration(registrations, rootTarget, {
+    attributes: true,
+    attributeFilter: rootAttributeFilter,
+    subtree: true,
+  });
+  setLogicalMutationRegistration(registrations, descendantTarget, {
+    childList: true,
+  });
+  rootAttributeFilter.push("style");
+  if (
+    registrations.size !== 2 ||
+    registrations.get(rootTarget)?.attributeFilter?.join(",") !== "class" ||
+    !registrations.get(descendantTarget)?.childList
+  ) {
+    throw new Error("Mutation multi-target registration self-test failed");
+  }
+  if (
+    !mutationMatchesRegistrations(
+      registrations,
+      {
+        type: "attributes",
+        target: descendantTarget,
+        attributeName: "class",
+      },
+      "data-runtime-errors",
+    ) ||
+    !mutationMatchesRegistrations(
+      registrations,
+      { type: "childList", target: descendantTarget },
+      "data-runtime-errors",
+    ) ||
+    mutationMatchesRegistrations(
+      registrations,
+      {
+        type: "attributes",
+        target: descendantTarget,
+        attributeName: "style",
+      },
+      "data-runtime-errors",
+    )
+  ) {
+    throw new Error("Mutation per-target filtering self-test failed");
+  }
+
+  const replacementAttributeFilter = ["style"];
+  setLogicalMutationRegistration(registrations, rootTarget, {
+    attributes: true,
+    attributeFilter: replacementAttributeFilter,
+    subtree: true,
+  });
+  replacementAttributeFilter.push("title");
+  if (
+    registrations.size !== 2 ||
+    registrations.get(rootTarget)?.attributeFilter?.join(",") !== "style" ||
+    !registrations.get(descendantTarget)?.childList ||
+    mutationMatchesRegistrations(
+      registrations,
+      {
+        type: "attributes",
+        target: descendantTarget,
+        attributeName: "class",
+      },
+      "data-runtime-errors",
+    ) ||
+    !mutationMatchesRegistrations(
+      registrations,
+      {
+        type: "attributes",
+        target: descendantTarget,
+        attributeName: "style",
+      },
+      "data-runtime-errors",
+    )
+  ) {
+    throw new Error("Mutation target option-update self-test failed");
+  }
+
+  const registrationCoverage = buildMutationCoverage([
+    { registrations },
+  ]);
+  if (
+    registrationCoverage.targets.size !== 2 ||
+    !registrationCoverage.targets.has(rootTarget) ||
+    !registrationCoverage.targets.has(descendantTarget) ||
+    !registrationCoverage.options.attributes ||
+    !registrationCoverage.options.childList ||
+    !registrationCoverage.options.subtree ||
+    registrationCoverage.options.attributeFilter?.join(",") !== "style"
+  ) {
+    throw new Error("Mutation multi-target coverage self-test failed");
+  }
+
+  const registrationSnapshot =
+    cloneLogicalMutationRegistrations(registrations);
+  registrations.get(rootTarget).attributeFilter.push("class");
+  if (
+    registrationSnapshot.get(rootTarget)?.attributeFilter?.join(",") !==
+    "style"
+  ) {
+    throw new Error("Mutation registration snapshot self-test failed");
+  }
+  clearLogicalMutationRegistrations(registrations);
+  if (registrations.size || registrationSnapshot.size !== 2) {
+    throw new Error("Mutation registration disconnect self-test failed");
+  }
+
+  const impliedAttributeOptions = normaliseMutationOptions({
+    attributeFilter: ["class"],
+  });
+  if (
+    !impliedAttributeOptions.attributes ||
+    impliedAttributeOptions.attributeFilter.join(",") !== "class"
+  ) {
+    throw new Error("Mutation option normalisation self-test failed");
+  }
+  let rejectedInvalidMutationOptions = false;
+  try {
+    normaliseMutationOptions({
+      attributes: false,
+      attributeFilter: [],
+      childList: true,
+    });
+  } catch (error) {
+    rejectedInvalidMutationOptions = error instanceof TypeError;
+  }
+  if (!rejectedInvalidMutationOptions) {
+    throw new Error("Mutation option validation self-test failed");
+  }
+
   console.log("Verified build transform safeguards");
 }
 
@@ -489,6 +926,25 @@ ${body
   )
   .join("\n");
 
+const runtimeMutationCoverageHelpers = [
+  mutationOptionsCover,
+  mutationCoverageCovers,
+  normaliseMutationOptions,
+  setLogicalMutationRegistration,
+  clearLogicalMutationRegistrations,
+  cloneLogicalMutationRegistrations,
+  mutationMatchesRegistrations,
+  buildMutationCoverage,
+]
+  .map((helper) =>
+    helper
+      .toString()
+      .split("\n")
+      .map((line) => (line ? `  ${line}` : ""))
+      .join("\n"),
+  )
+  .join("\n\n");
+
 const output = `// ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
@@ -526,6 +982,8 @@ ${moduleSwitches}
     reportIntervalMs: 30000,
   });
   const DIAGNOSTICS_ATTRIBUTE = "data-yt-master-diagnostics";
+  const RUNTIME_ERRORS_ATTRIBUTE = "data-yt-master-runtime-errors";
+  const MAX_RUNTIME_ERRORS = 20;
 
   const NativeMutationObserver = globalThis.MutationObserver;
   const SHARED_WINDOW_EVENTS = new Set([
@@ -541,25 +999,81 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
   const sharedMutationObservers = new Set();
   const styleParts = new Map();
   const idleModules = [];
+  const preservedMutationBatches = [];
   const registeredModuleIds = new Set();
   const moduleStates = new Map();
   const diagnosticStats = new Map();
+  const runtimeErrors = [];
   let nativeMutationObserver = null;
+  let nativeMutationCoverage = null;
+  let nativeLogicalObserverStates = new Map();
   let styleElement = null;
   let batchDepth = 0;
   let activeModuleId = "suite";
   let mutationRefreshPending = false;
+  let preservedMutationFlushPending = false;
+  let runtimeErrorPublishPending = false;
   let styleRenderPending = false;
+
+${runtimeMutationCoverageHelpers}
+
+  function publishRuntimeErrors() {
+    const root = document.documentElement;
+    if (!root || !runtimeErrors.length) return false;
+    root.setAttribute(RUNTIME_ERRORS_ATTRIBUTE, JSON.stringify(runtimeErrors));
+    return true;
+  }
+
+  function recordRuntimeError(ownerId, operation, error) {
+    runtimeErrors.push({
+      module: String(ownerId || "suite").slice(0, 100),
+      operation: String(operation || "runtime").slice(0, 160),
+      message: String(error?.message || error).slice(0, 500),
+      timestamp: new Date().toISOString(),
+    });
+    if (runtimeErrors.length > MAX_RUNTIME_ERRORS) {
+      runtimeErrors.splice(0, runtimeErrors.length - MAX_RUNTIME_ERRORS);
+    }
+
+    if (publishRuntimeErrors() || runtimeErrorPublishPending) return;
+    runtimeErrorPublishPending = true;
+    document.addEventListener(
+      "readystatechange",
+      () => {
+        runtimeErrorPublishPending = false;
+        publishRuntimeErrors();
+      },
+      { once: true },
+    );
+  }
 
   function reportModuleError(ownerId, label, error) {
     console.error(
       \`[YouTube Master Suite] [\${ownerId}] \${label} failed\`,
       error,
     );
+    recordRuntimeError(ownerId, label, error);
   }
 
   function now() {
     return globalThis.performance?.now?.() ?? Date.now();
+  }
+
+  function recordDiagnosticMeasurement(moduleId, operation, units, elapsedMs) {
+    const key = \`\${moduleId}:\${operation}\`;
+    const current = diagnosticStats.get(key) || {
+      module: moduleId,
+      operation,
+      calls: 0,
+      units: 0,
+      totalMs: 0,
+      maxMs: 0,
+    };
+    current.calls += 1;
+    current.units += units;
+    current.totalMs += elapsedMs;
+    current.maxMs = Math.max(current.maxMs, elapsedMs);
+    diagnosticStats.set(key, current);
   }
 
   function runWithDiagnostics(moduleId, operation, units, callback) {
@@ -571,21 +1085,12 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
     try {
       return callback();
     } finally {
-      const elapsedMs = now() - startedAt;
-      const key = \`\${moduleId}:\${operation}\`;
-      const current = diagnosticStats.get(key) || {
-        module: moduleId,
+      recordDiagnosticMeasurement(
+        moduleId,
         operation,
-        calls: 0,
-        units: 0,
-        totalMs: 0,
-        maxMs: 0,
-      };
-      current.calls += 1;
-      current.units += units;
-      current.totalMs += elapsedMs;
-      current.maxMs = Math.max(current.maxMs, elapsedMs);
-      diagnosticStats.set(key, current);
+        units,
+        now() - startedAt,
+      );
     }
   }
 
@@ -676,18 +1181,31 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
       globalThis.addEventListener(
         type,
         (event) => {
-          for (const registeredListener of [...group.listeners]) {
+          beginBatch();
+          try {
+            for (const registeredListener of [...group.listeners]) {
+              try {
+                runWithDiagnostics(
+                  registeredListener.ownerId,
+                  \`event:\${type}\`,
+                  1,
+                  () => invokeEventListener(registeredListener.listener, event),
+                );
+              } catch (error) {
+                reportModuleError(
+                  registeredListener.ownerId,
+                  \`\${type} event listener\`,
+                  error,
+                );
+              }
+            }
+          } finally {
             try {
-              runWithDiagnostics(
-                registeredListener.ownerId,
-                \`event:\${type}\`,
-                1,
-                () => invokeEventListener(registeredListener.listener, event),
-              );
+              endBatch();
             } catch (error) {
               reportModuleError(
-                registeredListener.ownerId,
-                \`\${type} event listener\`,
+                "suite",
+                \`\${type} batch finalisation\`,
                 error,
               );
             }
@@ -700,27 +1218,76 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
   }
 
   function mutationMatches(observer, mutation) {
-    const { target, options } = observer;
-    if (!target || !options) return false;
-    if (
-      mutation.target !== target &&
-      (!options.subtree || !target.contains(mutation.target))
-    ) {
-      return false;
-    }
-
-    if (mutation.type === "childList") return Boolean(options.childList);
-    if (mutation.type === "characterData") {
-      return Boolean(options.characterData);
-    }
-    if (mutation.type !== "attributes" || !options.attributes) return false;
-    return (
-      !options.attributeFilter ||
-      options.attributeFilter.includes(mutation.attributeName)
+    return mutationMatchesRegistrations(
+      observer.registrations,
+      mutation,
+      RUNTIME_ERRORS_ATTRIBUTE,
     );
   }
 
+  function dispatchMutationsWithDiagnostics(mutations) {
+    const dispatchStartedAt = now();
+    let accountedMs = 0;
+    try {
+      for (const observer of [...sharedMutationObservers]) {
+        if (!observer.active) continue;
+        const filterStartedAt = now();
+        let matchingMutations;
+        try {
+          matchingMutations = mutations.filter((mutation) =>
+            mutationMatches(observer, mutation),
+          );
+        } finally {
+          const filterElapsedMs = now() - filterStartedAt;
+          recordDiagnosticMeasurement(
+            observer.ownerId,
+            "mutation:filter",
+            mutations.length,
+            filterElapsedMs,
+          );
+          accountedMs += now() - filterStartedAt;
+        }
+        if (!matchingMutations.length) continue;
+
+        const callbackStartedAt = now();
+        try {
+          runWithDiagnostics(
+            observer.ownerId,
+            "mutation",
+            matchingMutations.length,
+            () => observer.callback(matchingMutations, observer),
+          );
+        } catch (error) {
+          reportModuleError(
+            observer.ownerId,
+            "mutation observer callback",
+            error,
+          );
+        } finally {
+          accountedMs += now() - callbackStartedAt;
+        }
+      }
+    } finally {
+      recordDiagnosticMeasurement(
+        "suite",
+        "mutation:dispatch-overhead",
+        mutations.length,
+        Math.max(0, now() - dispatchStartedAt - accountedMs),
+      );
+    }
+  }
+
   function dispatchMutations(mutations) {
+    // A native observer notification may already be queued when a rebuild
+    // drains its records. Flush that older batch before any records captured
+    // by the replacement observer so logical callbacks retain DOM order.
+    flushPreservedMutationBatches();
+
+    if (DIAGNOSTICS.enabled) {
+      dispatchMutationsWithDiagnostics(mutations);
+      return;
+    }
+
     for (const observer of [...sharedMutationObservers]) {
       if (!observer.active) continue;
       const matchingMutations = mutations.filter((mutation) =>
@@ -729,12 +1296,7 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
       if (!matchingMutations.length) continue;
 
       try {
-        runWithDiagnostics(
-          observer.ownerId,
-          "mutation",
-          matchingMutations.length,
-          () => observer.callback(matchingMutations, observer),
-        );
+        observer.callback(matchingMutations, observer);
       } catch (error) {
         reportModuleError(
           observer.ownerId,
@@ -745,6 +1307,97 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
     }
   }
 
+  function snapshotLogicalMutationObservers(activeObservers) {
+    return new Map(
+      activeObservers.map((observer) => [
+        observer,
+        {
+          observer,
+          generation: observer.generation,
+          registrations: cloneLogicalMutationRegistrations(
+            observer.registrations,
+          ),
+        },
+      ]),
+    );
+  }
+
+  function dispatchPreservedMutationBatch({ records, observerStates }) {
+    const dispatch = () => {
+      for (const state of observerStates) {
+        const { observer } = state;
+        if (
+          !observer.active ||
+          observer.generation !== state.generation
+        ) {
+          continue;
+        }
+
+        const filter = () =>
+          records.filter((mutation) => mutationMatches(state, mutation));
+        const matchingMutations = DIAGNOSTICS.enabled
+          ? runWithDiagnostics(
+              observer.ownerId,
+              "mutation:filter",
+              records.length,
+              filter,
+            )
+          : filter();
+        if (!matchingMutations.length) continue;
+
+        try {
+          if (DIAGNOSTICS.enabled) {
+            runWithDiagnostics(
+              observer.ownerId,
+              "mutation",
+              matchingMutations.length,
+              () => observer.callback(matchingMutations, observer),
+            );
+          } else {
+            observer.callback(matchingMutations, observer);
+          }
+        } catch (error) {
+          reportModuleError(
+            observer.ownerId,
+            "mutation observer callback",
+            error,
+          );
+        }
+      }
+    };
+
+    if (DIAGNOSTICS.enabled) {
+      runWithDiagnostics(
+        "suite",
+        "mutation:preserved-dispatch",
+        records.length,
+        dispatch,
+      );
+    } else {
+      dispatch();
+    }
+  }
+
+  function preserveNativeMutationRecords(records) {
+    if (!records.length) return;
+    const observerStates = [...nativeLogicalObserverStates.values()].filter(
+      ({ observer, generation }) =>
+        observer.active && observer.generation === generation,
+    );
+    if (!observerStates.length) return;
+
+    preservedMutationBatches.push({ records, observerStates });
+    if (preservedMutationFlushPending) return;
+    preservedMutationFlushPending = true;
+    queueMicrotask(flushPreservedMutationBatches);
+  }
+
+  function flushPreservedMutationBatches() {
+    preservedMutationFlushPending = false;
+    const batches = preservedMutationBatches.splice(0);
+    batches.forEach(dispatchPreservedMutationBatch);
+  }
+
   function requestMutationRefresh() {
     mutationRefreshPending = true;
     if (!batchDepth) refreshNativeMutationObserver();
@@ -752,45 +1405,49 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
 
   function refreshNativeMutationObserver() {
     mutationRefreshPending = false;
-    nativeMutationObserver?.disconnect();
-    nativeMutationObserver = null;
-
     const activeObservers = [...sharedMutationObservers].filter(
       (observer) => observer.active,
     );
-    if (!activeObservers.length) return;
-
-    const attributes = activeObservers.some(
-      (observer) => observer.options.attributes,
-    );
-    const observeAllAttributes = activeObservers.some(
-      (observer) =>
-        observer.options.attributes && !observer.options.attributeFilter,
-    );
-    const attributeFilter = observeAllAttributes
-      ? undefined
-      : [
-          ...new Set(
-            activeObservers.flatMap(
-              (observer) => observer.options.attributeFilter || [],
-            ),
-          ),
-        ];
-    const options = {
-      attributes,
-      childList: activeObservers.some((observer) => observer.options.childList),
-      characterData: activeObservers.some(
-        (observer) => observer.options.characterData,
-      ),
-      subtree: activeObservers.some((observer) => observer.options.subtree),
-    };
-    if (attributes && attributeFilter?.length) {
-      options.attributeFilter = attributeFilter;
+    if (!activeObservers.length) {
+      nativeMutationObserver?.disconnect();
+      nativeMutationObserver = null;
+      nativeMutationCoverage = null;
+      nativeLogicalObserverStates = new Map();
+      return;
     }
 
-    nativeMutationObserver = new NativeMutationObserver(dispatchMutations);
-    const targets = new Set(activeObservers.map((observer) => observer.target));
-    targets.forEach((target) => nativeMutationObserver.observe(target, options));
+    const requestedCoverage = buildMutationCoverage(activeObservers);
+    const requestedLogicalObserverStates =
+      snapshotLogicalMutationObservers(activeObservers);
+    if (
+      nativeMutationObserver &&
+      mutationCoverageCovers(nativeMutationCoverage, requestedCoverage)
+    ) {
+      preserveNativeMutationRecords(nativeMutationObserver.takeRecords());
+      nativeLogicalObserverStates = requestedLogicalObserverStates;
+      return;
+    }
+
+    if (nativeMutationObserver) {
+      preserveNativeMutationRecords(nativeMutationObserver.takeRecords());
+      nativeMutationObserver.disconnect();
+    }
+    nativeMutationObserver = null;
+    nativeMutationCoverage = null;
+    nativeLogicalObserverStates = new Map();
+
+    const replacementObserver = new NativeMutationObserver(dispatchMutations);
+    try {
+      requestedCoverage.targets.forEach((target) =>
+        replacementObserver.observe(target, requestedCoverage.options),
+      );
+    } catch (error) {
+      replacementObserver.disconnect();
+      throw error;
+    }
+    nativeMutationObserver = replacementObserver;
+    nativeMutationCoverage = requestedCoverage;
+    nativeLogicalObserverStates = requestedLogicalObserverStates;
   }
 
   class SharedMutationObserver {
@@ -800,22 +1457,25 @@ ${sourceModules.map(({ id }) => `    ${JSON.stringify(id)},`).join("\n")}
       }
       this.callback = callback;
       this.ownerId = activeModuleId;
-      this.target = null;
-      this.options = null;
+      this.registrations = new Map();
       this.active = false;
+      this.generation = 0;
       sharedMutationObservers.add(this);
     }
 
     observe(target, options) {
-      this.target = target;
-      this.options = { ...options };
+      const wasActive = this.active;
+      setLogicalMutationRegistration(this.registrations, target, options);
+      if (!wasActive) this.generation += 1;
       this.active = true;
       requestMutationRefresh();
     }
 
     disconnect() {
       if (!this.active) return;
+      clearLogicalMutationRegistrations(this.registrations);
       this.active = false;
+      this.generation += 1;
       requestMutationRefresh();
     }
 

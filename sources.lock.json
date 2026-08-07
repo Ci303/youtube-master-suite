@@ -3,13 +3,13 @@
   "modules": {
     "commentCleaner": {
       "path": "sources/modules/youtube-comment-cleaner.user.js",
-      "version": "1.14",
-      "sha256": "3f3cfc46728dd903dbbe2e2ad6d031201796ca801c1d602bfcd1a0736eeee977"
+      "version": "1.15",
+      "sha256": "a52286950538034d0d259213d57fa20290cffdff69cd65f0b7d1a842c965dbd5"
     },
     "feedUiCleaner": {
       "path": "sources/modules/youtube-feed-ui-cleaner.user.js",
-      "version": "2.3",
-      "sha256": "7e3d357af994e20ce61fdd717732403f1d1fba9273f109ea17d7c82608b21b69"
+      "version": "2.5",
+      "sha256": "f97994fbd0cc055ea0dba30ba8c9a57e79f547af358d5257021372c59a0fcc69"
     },
     "miniplayerButtonRestorer": {
       "path": "sources/modules/youtube-miniplayer-button-restorer.user.js",
@@ -18,23 +18,23 @@
     },
     "pageCoherence": {
       "path": "sources/modules/youtube-page-coherence.user.js",
-      "version": "1.1",
-      "sha256": "cb81d2a4de0790c385f4308f9a975c4036e85b7843ce53e62be658dd658ae99b"
+      "version": "1.2",
+      "sha256": "3951b38f30fdde288559dc25a70f31685a3477c40ccc15012e851f6fb8f2c0bb"
     },
     "playerPreferencesLite": {
       "path": "sources/modules/youtube-player-preferences-lite.user.js",
-      "version": "1.33",
-      "sha256": "2f8dc74c993f6b7185c221491a08f15b99b3999f6058b528074f1da3e4eb51b6"
+      "version": "1.39",
+      "sha256": "76549b916218ccc6f709c9baf0d9f6ded90251efd84d231415ba069196aa2fb6"
     },
     "scrollMiniplayer": {
       "path": "sources/modules/youtube-scroll-miniplayer.user.js",
-      "version": "5.8",
-      "sha256": "e5ba2b1fdc43efc1d0a4202cdd0259242f4b5c01904f96584abc771e21f861c2"
+      "version": "5.16",
+      "sha256": "fbdf512789513e3bd4d47da8eaefda24c5463fac083ae180817217e22ddded4e"
     },
     "watchLayoutCleaner": {
       "path": "sources/modules/youtube-watch-layout-cleaner.user.js",
-      "version": "1.25",
-      "sha256": "bcf15f6e55f62a3d012de72d28875fd5a6b69686e0bbf269653a392910df9fc8"
+      "version": "1.26",
+      "sha256": "f1f2522ef296c59cab06f4eca25a0be5a7122f1da8b16fd3b5eaf6957fcafac7"
     }
   }
 }

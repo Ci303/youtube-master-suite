@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Player Preferences Lite
 // @namespace    Citizen.youtube.player-preferences-lite
-// @version      1.33
+// @version      1.39
 // @description  Applies small YouTube player preferences without touching Enhancer-style miniplayer, queue, autoplay, or background playback controls.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-player-preferences-lite
@@ -49,6 +49,33 @@
     enablePlayerWheelVolume: true,
     requireRightMouseButtonForWheelVolume: true,
     wheelVolumeStep: 5,
+    feedFilterProfiles: {
+      default: {
+        upcomingStreams: true,
+        payToWatchCards: true,
+        watchedVideos: true,
+      },
+      home: {
+        upcomingStreams: true,
+        payToWatchCards: true,
+        watchedVideos: true,
+      },
+      subscriptions: {
+        upcomingStreams: true,
+        payToWatchCards: true,
+        watchedVideos: true,
+      },
+      search: {
+        upcomingStreams: true,
+        payToWatchCards: true,
+        watchedVideos: true,
+      },
+      history: {
+        upcomingStreams: true,
+        payToWatchCards: true,
+        watchedVideos: false,
+      },
+    },
   };
 
   const STYLE_ID = "ytppl-style";
@@ -58,6 +85,9 @@
   const EMPTY_RYD_ICON_ATTRIBUTE = "data-ytppl-empty-ryd-icon";
   const SHORTS_LINK_SELECTOR =
     'a[href^="/shorts/"], a[href*="youtube.com/shorts/"]';
+  const SHORTS_CONVERTED_ATTRIBUTE = "data-ytppl-shorts-converted";
+  const SHORTS_CONVERTED_LINK_SELECTOR =
+    `a[${SHORTS_CONVERTED_ATTRIBUTE}]`;
   const TOPBAR_LOGO_RENDERER_SELECTOR =
     "ytd-masthead ytd-topbar-logo-renderer";
   const FEED_CARD_CONTAINER_SELECTOR = [
@@ -137,11 +167,15 @@
     "ytd-playlist-panel-renderer #items",
     "ytd-engagement-panel-section-list-renderer",
   ].join(",");
-  const CARD_HIDE_DATASET_KEYS = [
-    "ytpplUpcomingHidden",
-    "ytpplPayToWatchHidden",
-    "ytpplWatchedHidden",
-  ];
+  const CARD_HIDE_ATTRIBUTES = Object.freeze({
+    ytpplUpcomingHidden: "data-ytppl-upcoming-hidden",
+    ytpplPayToWatchHidden: "data-ytppl-pay-to-watch-hidden",
+    ytpplWatchedHidden: "data-ytppl-watched-hidden",
+  });
+  const FILTER_REVEAL_ATTRIBUTE = "data-yt-master-show-filtered";
+  const CARD_HIDE_ATTRIBUTE_SELECTORS = Object.values(
+    CARD_HIDE_ATTRIBUTES,
+  ).map((attribute) => `[${attribute}="1"]`);
   // Keep the DOM marker and CSS selector in lockstep; YouTube custom elements
   // can expose non-standard style objects, so hiding is CSS-driven.
   const WATCH_ACTION_HIDDEN_DATASET_KEY = "ytpplActionHidden";
@@ -200,6 +234,7 @@
     "yt-lockup-view-model",
     "yt-lockup-view-model-wiz",
     SHORTS_LINK_SELECTOR,
+    SHORTS_CONVERTED_LINK_SELECTOR,
     TOPBAR_LOGO_RENDERER_SELECTOR,
     WATCH_ACTION_MUTATION_SELECTOR,
     "ytd-watch-flexy ytd-video-owner-renderer",
@@ -344,6 +379,28 @@
     return location.pathname === "/feed/history";
   }
 
+  function getFeedFilterProfileName() {
+    if (location.pathname === "/" || location.pathname === "/feed/recommended") {
+      return "home";
+    }
+    if (location.pathname === "/feed/subscriptions") {
+      return "subscriptions";
+    }
+    if (location.pathname === "/results") {
+      return "search";
+    }
+    if (isHistoryPath()) {
+      return "history";
+    }
+    return "default";
+  }
+
+  function isFeedFilterEnabled(setting) {
+    const profiles = CONFIG.feedFilterProfiles || {};
+    const profile = profiles[getFeedFilterProfileName()] || profiles.default;
+    return profile?.[setting] !== false;
+  }
+
   function isExcludedSurface(target) {
     return Boolean(closestElement(target, EXCLUDED_SURFACE_SELECTOR));
   }
@@ -382,6 +439,17 @@
     const url = new URL("/watch", location.origin);
     url.searchParams.set("v", shortId);
     return url.toString();
+  }
+
+  function getWatchIdFromUrl(rawUrl) {
+    let url;
+    try {
+      url = new URL(rawUrl, location.origin);
+    } catch {
+      return "";
+    }
+
+    return url.pathname === "/watch" ? url.searchParams.get("v") || "" : "";
   }
 
   function getElementText(el) {
@@ -468,7 +536,21 @@
       return;
     }
 
-    root.querySelectorAll(SHORTS_LINK_SELECTOR).forEach((link) => {
+    // YouTube recycles feed anchors. Keep a converted marker only while its
+    // current /watch target still represents the same Short.
+    collectMatchingElements(root, SHORTS_CONVERTED_LINK_SELECTOR).forEach(
+      (link) => {
+        const convertedId = link.getAttribute(SHORTS_CONVERTED_ATTRIBUTE) || "";
+        const watchId = getWatchIdFromUrl(
+          link.href || link.getAttribute("href"),
+        );
+        if (!convertedId || watchId !== convertedId) {
+          link.removeAttribute(SHORTS_CONVERTED_ATTRIBUTE);
+        }
+      },
+    );
+
+    collectMatchingElements(root, SHORTS_LINK_SELECTOR).forEach((link) => {
       if (isExcludedSurface(link)) {
         return;
       }
@@ -480,8 +562,8 @@
         return;
       }
 
+      link.setAttribute(SHORTS_CONVERTED_ATTRIBUTE, shortId);
       link.href = getWatchUrlForShort(shortId);
-      link.dataset.ytpplShortsConverted = "1";
     });
   }
 
@@ -501,8 +583,8 @@
     }
 
     const watchUrl = getWatchUrlForShort(shortId);
+    link.setAttribute(SHORTS_CONVERTED_ATTRIBUTE, shortId);
     link.href = watchUrl;
-    link.dataset.ytpplShortsConverted = "1";
 
     const opensOutsideCurrentTab =
       event.defaultPrevented ||
@@ -557,24 +639,31 @@
       return;
     }
 
-    const shouldHide = CARD_HIDE_DATASET_KEYS.some(
-      (key) => container.dataset[key] === "1",
-    );
-    container.hidden = shouldHide;
-
-    if (shouldHide) {
-      container.style.setProperty("display", "none", "important");
-    } else {
-      container.style.removeProperty("display");
-    }
   }
 
   function hideMatchingCards(root, enabled, selector, datasetKey, predicate) {
+    const attribute = CARD_HIDE_ATTRIBUTES[datasetKey];
+    const markerSelector = attribute ? `[${attribute}="1"]` : "";
+    const candidates = collectMatchingElements(root, selector);
+
+    if (markerSelector) {
+      collectMatchingElements(root, markerSelector).forEach((card) =>
+        candidates.add(card),
+      );
+      const rootElement =
+        root?.nodeType === Node.ELEMENT_NODE ? root : null;
+      const closestMarkedCard = rootElement?.closest?.(markerSelector);
+      if (closestMarkedCard) {
+        candidates.add(closestMarkedCard);
+      }
+    }
+
     if (!enabled) {
+      candidates.forEach((card) => setCardHidden(card, datasetKey, false));
       return;
     }
 
-    collectMatchingElements(root, selector).forEach((card) => {
+    candidates.forEach((card) => {
       setCardHidden(card, datasetKey, predicate(card));
     });
   }
@@ -582,7 +671,7 @@
   function hideUpcomingStreams(root = document) {
     hideMatchingCards(
       root,
-      CONFIG.hideUpcomingStreams,
+      CONFIG.hideUpcomingStreams && isFeedFilterEnabled("upcomingStreams"),
       UPCOMING_STREAM_SCAN_SELECTOR,
       "ytpplUpcomingHidden",
       isUpcomingStreamCard,
@@ -615,7 +704,7 @@
   function hidePayToWatchCards(root = document) {
     hideMatchingCards(
       root,
-      CONFIG.hidePayToWatchCards,
+      CONFIG.hidePayToWatchCards && isFeedFilterEnabled("payToWatchCards"),
       PAY_TO_WATCH_SCAN_SELECTOR,
       "ytpplPayToWatchHidden",
       isPayToWatchCard,
@@ -762,18 +851,19 @@
 
   function hideWatchedVideos(root = document) {
     if (isHistoryPath()) {
-      collectMatchingElements(
+      hideMatchingCards(
         root,
-        '[data-ytppl-watched-hidden="1"]',
-      ).forEach((card) => {
-        setCardHidden(card, "ytpplWatchedHidden", false);
-      });
+        false,
+        WATCHED_VIDEO_SCAN_SELECTOR,
+        "ytpplWatchedHidden",
+        isWatchedVideoCard,
+      );
       return;
     }
 
     hideMatchingCards(
       root,
-      CONFIG.hideWatchedVideos,
+      CONFIG.hideWatchedVideos && isFeedFilterEnabled("watchedVideos"),
       WATCHED_VIDEO_SCAN_SELECTOR,
       "ytpplWatchedHidden",
       isWatchedVideoCard,
@@ -1608,14 +1698,14 @@
   function setExpandedDescriptionCollapsed(expanded, collapsed) {
     if (collapsed) {
       expanded.dataset[DESCRIPTION_EXPANDED_COLLAPSED_DATASET_KEY] = "1";
-      expanded.style.setProperty("display", "none", "important");
-      expanded.style.setProperty("height", "0", "important");
-      expanded.style.setProperty("line-height", "0", "important");
-      expanded.style.setProperty("max-height", "0", "important");
-      expanded.style.setProperty("min-height", "0", "important");
-      expanded.style.setProperty("margin", "0", "important");
-      expanded.style.setProperty("overflow", "hidden", "important");
-      expanded.style.setProperty("padding", "0", "important");
+      setImportantStyleProperty(expanded, "display", "none");
+      setImportantStyleProperty(expanded, "height", "0px");
+      setImportantStyleProperty(expanded, "line-height", "0px");
+      setImportantStyleProperty(expanded, "max-height", "0px");
+      setImportantStyleProperty(expanded, "min-height", "0px");
+      setImportantStyleProperty(expanded, "margin", "0px");
+      setImportantStyleProperty(expanded, "overflow", "hidden");
+      setImportantStyleProperty(expanded, "padding", "0px");
       return;
     }
 
@@ -1636,38 +1726,20 @@
     ].forEach((property) => expanded.style.removeProperty(property));
   }
 
+  function setImportantStyleProperty(el, property, value) {
+    if (
+      el.style.getPropertyValue(property) === value &&
+      el.style.getPropertyPriority(property) === "important"
+    ) {
+      return;
+    }
+
+    el.style.setProperty(property, value, "important");
+  }
+
   function hasRenderedBox(el) {
     const rect = el.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
-  }
-
-  function isVisibleDescriptionContentElement(el) {
-    if (!el || closestElement(el, DESCRIPTION_CONTROL_SELECTOR)) {
-      return false;
-    }
-
-    const style = getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden") {
-      return false;
-    }
-
-    return hasRenderedBox(el);
-  }
-
-  function getExpandedDescriptionContentHeight(expanded) {
-    const expandedRect = expanded.getBoundingClientRect();
-    let bottom = 0;
-
-    Array.from(expanded.children).forEach((child) => {
-      if (!isVisibleDescriptionContentElement(child)) {
-        return;
-      }
-
-      const rect = child.getBoundingClientRect();
-      bottom = Math.max(bottom, rect.bottom - expandedRect.top);
-    });
-
-    return bottom ? Math.ceil(bottom) + 1 : 0;
   }
 
   function getExpandedDescriptionHeightResetElements(expanded) {
@@ -1696,15 +1768,10 @@
     }
 
     getExpandedDescriptionHeightResetElements(expanded).forEach((el) => {
-      el.style.setProperty("height", "auto", "important");
-      el.style.setProperty("min-height", "0", "important");
+      setImportantStyleProperty(el, "height", "auto");
+      setImportantStyleProperty(el, "min-height", "0px");
     });
-    expanded.style.setProperty("max-height", "none", "important");
-
-    const contentHeight = getExpandedDescriptionContentHeight(expanded);
-    if (contentHeight) {
-      expanded.style.setProperty("height", `${contentHeight}px`, "important");
-    }
+    setImportantStyleProperty(expanded, "max-height", "none");
   }
 
   function collapseEmptyExpandedDescriptions(root = document) {
@@ -1784,15 +1851,16 @@
       return;
     }
 
-    const staticTextValue = getWatchInfoStaticText(row);
-    if (!staticTextValue) {
-      return;
-    }
-
     let staticText = row.querySelector(`.${WATCH_INFO_STATIC_TEXT_CLASS}`);
     const nativeContainer = row.querySelector(
       WATCH_INFO_NATIVE_CONTAINER_SELECTOR,
     );
+    const staticTextValue = getWatchInfoStaticText(row);
+    if (!staticTextValue) {
+      staticText?.remove();
+      nativeContainer?.removeAttribute(WATCH_INFO_NATIVE_HIDDEN_ATTRIBUTE);
+      return;
+    }
 
     if (!staticText) {
       staticText = document.createElement("span");
@@ -1865,12 +1933,20 @@
     }
 
     return `
+        grid-shelf-view-model:has(ytm-shorts-lockup-view-model-v2),
         ytd-rich-section-renderer:has(ytd-rich-shelf-renderer[is-shorts]),
         ytd-rich-section-renderer:has(ytd-reel-shelf-renderer),
         ytd-rich-section-renderer:has(a[href^="/shorts/"]),
         ytd-rich-item-renderer:has(a[href^="/shorts/"]),
+        ytd-rich-item-renderer:has(${SHORTS_CONVERTED_LINK_SELECTOR}),
         ytd-video-renderer:has(a[href^="/shorts/"]),
+        ytd-video-renderer:has(${SHORTS_CONVERTED_LINK_SELECTOR}),
         ytd-grid-video-renderer:has(a[href^="/shorts/"]),
+        ytd-grid-video-renderer:has(${SHORTS_CONVERTED_LINK_SELECTOR}),
+        yt-lockup-view-model:has(${SHORTS_CONVERTED_LINK_SELECTOR}),
+        yt-lockup-view-model-wiz:has(${SHORTS_CONVERTED_LINK_SELECTOR}),
+        ytm-shorts-lockup-view-model:has(${SHORTS_CONVERTED_LINK_SELECTOR}),
+        ytm-shorts-lockup-view-model-v2:has(${SHORTS_CONVERTED_LINK_SELECTOR}),
         ytd-reel-shelf-renderer,
         ytd-reel-item-renderer,
         ytd-shorts,
@@ -1882,16 +1958,27 @@
   }
 
   function buildFeedCleanupCss() {
-    if (!CONFIG.hideBrandVideoShelf) {
-      return "";
-    }
+    const rules = [
+      `
+        ${CARD_HIDE_ATTRIBUTE_SELECTORS.map(
+          (selector) =>
+            `:root:not([${FILTER_REVEAL_ATTRIBUTE}="1"]) ${selector}`,
+        ).join(",\n        ")} {
+          display: none !important;
+        }
+      `,
+    ];
 
-    return `
+    if (CONFIG.hideBrandVideoShelf) {
+      rules.push(`
         ytd-rich-section-renderer:has(ytd-brand-video-shelf-renderer),
         ytd-brand-video-shelf-renderer {
           display: none !important;
         }
-      `;
+      `);
+    }
+
+    return rules.join("\n");
   }
 
   function buildWatchCleanupCss() {
@@ -2090,7 +2177,6 @@
     }
 
     return `
-        ytd-watch-flexy #panels:has(ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-live-chat"]),
         ytd-watch-flexy ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-live-chat"],
         ytd-watch-flexy ytd-engagement-panel-section-list-renderer:has(ytd-live-chat-frame),
         ytd-watch-flexy ytd-engagement-panel-section-list-renderer:has(yt-live-chat-app),
@@ -2102,16 +2188,8 @@
         ytd-watch-live-chat-renderer,
         ytd-watch-live-chat-replay-renderer,
         ytd-live-chat-viewer-engagement-message-renderer,
-        ytd-watch-flexy ytd-watch-metadata #teaser-carousel.ytd-watch-metadata:has(yt-carousel-item-view-model[aria-label="Live chat replay"]),
-        ytd-watch-flexy ytd-watch-metadata #teaser-carousel.ytd-watch-metadata:has(yt-carousel-item-view-model[aria-label*="Live chat" i]),
-        ytd-watch-flexy yt-video-metadata-carousel-view-model:has(yt-carousel-item-view-model[aria-label="Live chat replay"]),
-        ytd-watch-flexy yt-video-metadata-carousel-view-model:has(yt-carousel-item-view-model[aria-label*="Live chat" i]),
-        ytd-watch-flexy .ytVideoMetadataCarouselViewModelHost:has(yt-carousel-item-view-model[aria-label="Live chat replay"]),
-        ytd-watch-flexy .ytVideoMetadataCarouselViewModelHost:has(yt-carousel-item-view-model[aria-label*="Live chat" i]),
-        ytd-watch-flexy .ytVideoMetadataCarouselViewModelCarouselContainer:has(yt-carousel-item-view-model[aria-label="Live chat replay"]),
-        ytd-watch-flexy .ytVideoMetadataCarouselViewModelCarouselContainer:has(yt-carousel-item-view-model[aria-label*="Live chat" i]),
-        ytd-watch-flexy .ytVideoMetadataCarouselViewModelTitleSection:has(+ .ytVideoMetadataCarouselViewModelCarouselContainer yt-carousel-item-view-model[aria-label="Live chat replay"]),
-        ytd-watch-flexy .ytVideoMetadataCarouselViewModelTitleSection:has(+ .ytVideoMetadataCarouselViewModelCarouselContainer yt-carousel-item-view-model[aria-label*="Live chat" i]) {
+        ytd-watch-flexy yt-carousel-item-view-model[aria-label="Live chat replay"],
+        ytd-watch-flexy yt-carousel-item-view-model[aria-label*="Live chat" i] {
           display: none !important;
         }
       `;
@@ -2142,15 +2220,12 @@
       return "";
     }
 
+    // Keep end-screen geometry native because YouTube uses it while preparing
+    // the autoplay handoff. Hide only the individual recommendation tiles;
+    // never hide their fullscreen grid container or remove tiles from layout.
     return `
-        .html5-video-player .ytp-endscreen-content,
-        .html5-video-player .ytp-endscreen-previous,
-        .html5-video-player .ytp-endscreen-next,
-        .html5-video-player .ytp-endscreen-paginate,
         .html5-video-player .ytp-videowall-still,
-        .html5-video-player .ytp-modern-videowall-still,
-        .html5-video-player .ytp-fullscreen-grid-stills-container {
-          display: none !important;
+        .html5-video-player .ytp-modern-videowall-still {
           opacity: 0 !important;
           pointer-events: none !important;
         }
@@ -2720,6 +2795,7 @@
   function handleNavigateStart() {
     clearLiveChatCollapseAttempts();
     clearPlayerLayoutRefreshAttempts();
+    rightButtonHeldOnPlayer = false;
   }
 
   function handleDescriptionClick(event) {
@@ -2874,6 +2950,15 @@
       return;
     }
 
+    if (
+      mutation.type === "childList" &&
+      mutation.removedNodes &&
+      mutation.removedNodes.length
+    ) {
+      addScopedMutationRoot(roots, mutation.target);
+      return;
+    }
+
     if (mutation.type !== "attributes" && mutation.type !== "characterData") {
       return;
     }
@@ -2906,6 +2991,7 @@
       "aria-label",
       "class",
       "hidden",
+      "href",
       "show-yoodle",
       "style",
       "title",
@@ -2938,6 +3024,7 @@
     },
     true,
   );
+
   window.addEventListener(
     "pageshow",
     () => {

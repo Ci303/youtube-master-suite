@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.21
+// @version      0.1.29
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -19,18 +19,18 @@
 // or the module switches, then rebuild; do not edit module bodies here.
 //
 // Source manifest:
-//   Comment Cleaner v1.14 | sources/modules/youtube-comment-cleaner.user.js | sha256:3f3cfc46728dd903dbbe2e2ad6d031201796ca801c1d602bfcd1a0736eeee977
-//   Feed UI Cleaner v2.3 | sources/modules/youtube-feed-ui-cleaner.user.js | sha256:7e3d357af994e20ce61fdd717732403f1d1fba9273f109ea17d7c82608b21b69
+//   Comment Cleaner v1.15 | sources/modules/youtube-comment-cleaner.user.js | sha256:a52286950538034d0d259213d57fa20290cffdff69cd65f0b7d1a842c965dbd5
+//   Feed UI Cleaner v2.5 | sources/modules/youtube-feed-ui-cleaner.user.js | sha256:f97994fbd0cc055ea0dba30ba8c9a57e79f547af358d5257021372c59a0fcc69
 //   Miniplayer Button Restorer v1.4 | sources/modules/youtube-miniplayer-button-restorer.user.js | sha256:4cdb1ab40ccf08d695797e83cf7253f170fbec4606bed8b5e06270960c0cdc8b
-//   Page Coherence Guard v1.1 | sources/modules/youtube-page-coherence.user.js | sha256:cb81d2a4de0790c385f4308f9a975c4036e85b7843ce53e62be658dd658ae99b
-//   Player Preferences Lite v1.33 | sources/modules/youtube-player-preferences-lite.user.js | sha256:2f8dc74c993f6b7185c221491a08f15b99b3999f6058b528074f1da3e4eb51b6
-//   Scroll Miniplayer v5.8 | sources/modules/youtube-scroll-miniplayer.user.js | sha256:e5ba2b1fdc43efc1d0a4202cdd0259242f4b5c01904f96584abc771e21f861c2
-//   Watch Layout Cleaner v1.25 | sources/modules/youtube-watch-layout-cleaner.user.js | sha256:bcf15f6e55f62a3d012de72d28875fd5a6b69686e0bbf269653a392910df9fc8
+//   Page Coherence Guard v1.2 | sources/modules/youtube-page-coherence.user.js | sha256:3951b38f30fdde288559dc25a70f31685a3477c40ccc15012e851f6fb8f2c0bb
+//   Player Preferences Lite v1.39 | sources/modules/youtube-player-preferences-lite.user.js | sha256:76549b916218ccc6f709c9baf0d9f6ded90251efd84d231415ba069196aa2fb6
+//   Scroll Miniplayer v5.16 | sources/modules/youtube-scroll-miniplayer.user.js | sha256:fbdf512789513e3bd4d47da8eaefda24c5463fac083ae180817217e22ddded4e
+//   Watch Layout Cleaner v1.26 | sources/modules/youtube-watch-layout-cleaner.user.js | sha256:f1f2522ef296c59cab06f4eca25a0be5a7122f1da8b16fd3b5eaf6957fcafac7
 
 (() => {
   "use strict";
 
-  const MASTER_VERSION = "0.1.21";
+  const MASTER_VERSION = "0.1.29";
   const EXPECTED_MODULE_COUNT = 7;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -47,6 +47,8 @@
     reportIntervalMs: 30000,
   });
   const DIAGNOSTICS_ATTRIBUTE = "data-yt-master-diagnostics";
+  const RUNTIME_ERRORS_ATTRIBUTE = "data-yt-master-runtime-errors";
+  const MAX_RUNTIME_ERRORS = 20;
 
   const NativeMutationObserver = globalThis.MutationObserver;
   const SHARED_WINDOW_EVENTS = new Set([
@@ -68,25 +70,311 @@
   const sharedMutationObservers = new Set();
   const styleParts = new Map();
   const idleModules = [];
+  const preservedMutationBatches = [];
   const registeredModuleIds = new Set();
   const moduleStates = new Map();
   const diagnosticStats = new Map();
+  const runtimeErrors = [];
   let nativeMutationObserver = null;
+  let nativeMutationCoverage = null;
+  let nativeLogicalObserverStates = new Map();
   let styleElement = null;
   let batchDepth = 0;
   let activeModuleId = "suite";
   let mutationRefreshPending = false;
+  let preservedMutationFlushPending = false;
+  let runtimeErrorPublishPending = false;
   let styleRenderPending = false;
+
+  function mutationOptionsCover(availableOptions, requestedOptions) {
+    for (const optionName of [
+      "attributes",
+      "attributeOldValue",
+      "childList",
+      "characterData",
+      "characterDataOldValue",
+      "subtree",
+    ]) {
+      if (requestedOptions[optionName] && !availableOptions[optionName]) {
+        return false;
+      }
+    }
+
+    if (!requestedOptions.attributes) return true;
+
+    const availableFilter = availableOptions.attributeFilter;
+    const requestedFilter = requestedOptions.attributeFilter;
+    if (!requestedFilter?.length) return !availableFilter?.length;
+    if (!availableFilter?.length) return true;
+    return requestedFilter.every((attributeName) =>
+      availableFilter.includes(attributeName),
+    );
+  }
+
+  function mutationCoverageCovers(availableCoverage, requestedCoverage) {
+    if (
+      !availableCoverage ||
+      !requestedCoverage ||
+      !mutationOptionsCover(
+        availableCoverage.options,
+        requestedCoverage.options,
+      )
+    ) {
+      return false;
+    }
+
+    const retainedTargets = new Set();
+    for (const requestedTarget of requestedCoverage.targets) {
+      if (availableCoverage.targets.has(requestedTarget)) {
+        retainedTargets.add(requestedTarget);
+        continue;
+      }
+
+      const coveringTarget = availableCoverage.options.subtree
+        ? [...availableCoverage.targets].find(
+            (availableTarget) =>
+              typeof availableTarget?.contains === "function" &&
+              availableTarget.contains(requestedTarget),
+          )
+        : null;
+      if (!coveringTarget) return false;
+      retainedTargets.add(coveringTarget);
+    }
+
+    for (const availableTarget of availableCoverage.targets) {
+      if (retainedTargets.has(availableTarget)) continue;
+      if (
+        !requestedCoverage.options.subtree ||
+        ![...requestedCoverage.targets].some(
+          (requestedTarget) =>
+            typeof requestedTarget?.contains === "function" &&
+            requestedTarget.contains(availableTarget),
+        )
+      ) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  function normaliseMutationOptions(options = {}) {
+    options ??= {};
+    const normalisedOptions = {
+      ...options,
+      attributes: Boolean(options.attributes),
+      attributeOldValue: Boolean(options.attributeOldValue),
+      childList: Boolean(options.childList),
+      characterData: Boolean(options.characterData),
+      characterDataOldValue: Boolean(options.characterDataOldValue),
+      subtree: Boolean(options.subtree),
+    };
+
+    if (
+      options.attributes === undefined &&
+      (options.attributeOldValue !== undefined ||
+        options.attributeFilter !== undefined)
+    ) {
+      normalisedOptions.attributes = true;
+    }
+    if (
+      options.characterData === undefined &&
+      options.characterDataOldValue !== undefined
+    ) {
+      normalisedOptions.characterData = true;
+    }
+    if (options.attributeFilter !== undefined) {
+      normalisedOptions.attributeFilter = [...options.attributeFilter].map(String);
+    } else {
+      delete normalisedOptions.attributeFilter;
+    }
+
+    if (
+      !normalisedOptions.attributes &&
+      !normalisedOptions.childList &&
+      !normalisedOptions.characterData
+    ) {
+      throw new TypeError(
+        "MutationObserver options must enable attributes, childList, or characterData",
+      );
+    }
+    if (
+      !normalisedOptions.attributes &&
+      (normalisedOptions.attributeOldValue ||
+        options.attributeFilter !== undefined)
+    ) {
+      throw new TypeError(
+        "MutationObserver attribute options require attributes to be enabled",
+      );
+    }
+    if (
+      !normalisedOptions.characterData &&
+      normalisedOptions.characterDataOldValue
+    ) {
+      throw new TypeError(
+        "MutationObserver characterDataOldValue requires characterData",
+      );
+    }
+
+    return normalisedOptions;
+  }
+
+  function setLogicalMutationRegistration(registrations, target, options) {
+    registrations.set(target, normaliseMutationOptions(options));
+  }
+
+  function clearLogicalMutationRegistrations(registrations) {
+    registrations.clear();
+  }
+
+  function cloneLogicalMutationRegistrations(registrations) {
+    return new Map(
+      [...registrations].map(([target, options]) => [
+        target,
+        {
+          ...options,
+          ...(options.attributeFilter
+            ? { attributeFilter: [...options.attributeFilter] }
+            : {}),
+        },
+      ]),
+    );
+  }
+
+  function mutationMatchesRegistrations(
+    registrations,
+    mutation,
+    ignoredAttributeName,
+  ) {
+    if (
+      mutation.type === "attributes" &&
+      mutation.attributeName === ignoredAttributeName
+    ) {
+      return false;
+    }
+
+    for (const [target, options] of registrations) {
+      if (
+        mutation.target !== target &&
+        (!options.subtree || !target.contains(mutation.target))
+      ) {
+        continue;
+      }
+
+      if (mutation.type === "childList" && options.childList) return true;
+      if (mutation.type === "characterData" && options.characterData) return true;
+      if (
+        mutation.type === "attributes" &&
+        options.attributes &&
+        (!options.attributeFilter ||
+          options.attributeFilter.includes(mutation.attributeName))
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function buildMutationCoverage(activeObservers) {
+    const registrations = activeObservers.flatMap((observer) =>
+      [...observer.registrations].map(([target, options]) => ({
+        target,
+        options,
+      })),
+    );
+    const attributes = registrations.some(({ options }) => options.attributes);
+    const observeAllAttributes = registrations.some(
+      ({ options }) => options.attributes && !options.attributeFilter,
+    );
+    const attributeFilter = observeAllAttributes
+      ? undefined
+      : [
+          ...new Set(
+            registrations.flatMap(
+              ({ options }) => options.attributeFilter || [],
+            ),
+          ),
+        ];
+    const options = {
+      attributes,
+      attributeOldValue: registrations.some(
+        ({ options }) => options.attributeOldValue,
+      ),
+      childList: registrations.some(({ options }) => options.childList),
+      characterData: registrations.some(({ options }) => options.characterData),
+      characterDataOldValue: registrations.some(
+        ({ options }) => options.characterDataOldValue,
+      ),
+      subtree: registrations.some(({ options }) => options.subtree),
+    };
+    if (attributes && attributeFilter?.length) {
+      options.attributeFilter = attributeFilter;
+    }
+
+    return {
+      options,
+      targets: new Set(registrations.map(({ target }) => target)),
+    };
+  }
+
+  function publishRuntimeErrors() {
+    const root = document.documentElement;
+    if (!root || !runtimeErrors.length) return false;
+    root.setAttribute(RUNTIME_ERRORS_ATTRIBUTE, JSON.stringify(runtimeErrors));
+    return true;
+  }
+
+  function recordRuntimeError(ownerId, operation, error) {
+    runtimeErrors.push({
+      module: String(ownerId || "suite").slice(0, 100),
+      operation: String(operation || "runtime").slice(0, 160),
+      message: String(error?.message || error).slice(0, 500),
+      timestamp: new Date().toISOString(),
+    });
+    if (runtimeErrors.length > MAX_RUNTIME_ERRORS) {
+      runtimeErrors.splice(0, runtimeErrors.length - MAX_RUNTIME_ERRORS);
+    }
+
+    if (publishRuntimeErrors() || runtimeErrorPublishPending) return;
+    runtimeErrorPublishPending = true;
+    document.addEventListener(
+      "readystatechange",
+      () => {
+        runtimeErrorPublishPending = false;
+        publishRuntimeErrors();
+      },
+      { once: true },
+    );
+  }
 
   function reportModuleError(ownerId, label, error) {
     console.error(
       `[YouTube Master Suite] [${ownerId}] ${label} failed`,
       error,
     );
+    recordRuntimeError(ownerId, label, error);
   }
 
   function now() {
     return globalThis.performance?.now?.() ?? Date.now();
+  }
+
+  function recordDiagnosticMeasurement(moduleId, operation, units, elapsedMs) {
+    const key = `${moduleId}:${operation}`;
+    const current = diagnosticStats.get(key) || {
+      module: moduleId,
+      operation,
+      calls: 0,
+      units: 0,
+      totalMs: 0,
+      maxMs: 0,
+    };
+    current.calls += 1;
+    current.units += units;
+    current.totalMs += elapsedMs;
+    current.maxMs = Math.max(current.maxMs, elapsedMs);
+    diagnosticStats.set(key, current);
   }
 
   function runWithDiagnostics(moduleId, operation, units, callback) {
@@ -98,21 +386,12 @@
     try {
       return callback();
     } finally {
-      const elapsedMs = now() - startedAt;
-      const key = `${moduleId}:${operation}`;
-      const current = diagnosticStats.get(key) || {
-        module: moduleId,
+      recordDiagnosticMeasurement(
+        moduleId,
         operation,
-        calls: 0,
-        units: 0,
-        totalMs: 0,
-        maxMs: 0,
-      };
-      current.calls += 1;
-      current.units += units;
-      current.totalMs += elapsedMs;
-      current.maxMs = Math.max(current.maxMs, elapsedMs);
-      diagnosticStats.set(key, current);
+        units,
+        now() - startedAt,
+      );
     }
   }
 
@@ -203,18 +482,31 @@
       globalThis.addEventListener(
         type,
         (event) => {
-          for (const registeredListener of [...group.listeners]) {
+          beginBatch();
+          try {
+            for (const registeredListener of [...group.listeners]) {
+              try {
+                runWithDiagnostics(
+                  registeredListener.ownerId,
+                  `event:${type}`,
+                  1,
+                  () => invokeEventListener(registeredListener.listener, event),
+                );
+              } catch (error) {
+                reportModuleError(
+                  registeredListener.ownerId,
+                  `${type} event listener`,
+                  error,
+                );
+              }
+            }
+          } finally {
             try {
-              runWithDiagnostics(
-                registeredListener.ownerId,
-                `event:${type}`,
-                1,
-                () => invokeEventListener(registeredListener.listener, event),
-              );
+              endBatch();
             } catch (error) {
               reportModuleError(
-                registeredListener.ownerId,
-                `${type} event listener`,
+                "suite",
+                `${type} batch finalisation`,
                 error,
               );
             }
@@ -227,27 +519,76 @@
   }
 
   function mutationMatches(observer, mutation) {
-    const { target, options } = observer;
-    if (!target || !options) return false;
-    if (
-      mutation.target !== target &&
-      (!options.subtree || !target.contains(mutation.target))
-    ) {
-      return false;
-    }
-
-    if (mutation.type === "childList") return Boolean(options.childList);
-    if (mutation.type === "characterData") {
-      return Boolean(options.characterData);
-    }
-    if (mutation.type !== "attributes" || !options.attributes) return false;
-    return (
-      !options.attributeFilter ||
-      options.attributeFilter.includes(mutation.attributeName)
+    return mutationMatchesRegistrations(
+      observer.registrations,
+      mutation,
+      RUNTIME_ERRORS_ATTRIBUTE,
     );
   }
 
+  function dispatchMutationsWithDiagnostics(mutations) {
+    const dispatchStartedAt = now();
+    let accountedMs = 0;
+    try {
+      for (const observer of [...sharedMutationObservers]) {
+        if (!observer.active) continue;
+        const filterStartedAt = now();
+        let matchingMutations;
+        try {
+          matchingMutations = mutations.filter((mutation) =>
+            mutationMatches(observer, mutation),
+          );
+        } finally {
+          const filterElapsedMs = now() - filterStartedAt;
+          recordDiagnosticMeasurement(
+            observer.ownerId,
+            "mutation:filter",
+            mutations.length,
+            filterElapsedMs,
+          );
+          accountedMs += now() - filterStartedAt;
+        }
+        if (!matchingMutations.length) continue;
+
+        const callbackStartedAt = now();
+        try {
+          runWithDiagnostics(
+            observer.ownerId,
+            "mutation",
+            matchingMutations.length,
+            () => observer.callback(matchingMutations, observer),
+          );
+        } catch (error) {
+          reportModuleError(
+            observer.ownerId,
+            "mutation observer callback",
+            error,
+          );
+        } finally {
+          accountedMs += now() - callbackStartedAt;
+        }
+      }
+    } finally {
+      recordDiagnosticMeasurement(
+        "suite",
+        "mutation:dispatch-overhead",
+        mutations.length,
+        Math.max(0, now() - dispatchStartedAt - accountedMs),
+      );
+    }
+  }
+
   function dispatchMutations(mutations) {
+    // A native observer notification may already be queued when a rebuild
+    // drains its records. Flush that older batch before any records captured
+    // by the replacement observer so logical callbacks retain DOM order.
+    flushPreservedMutationBatches();
+
+    if (DIAGNOSTICS.enabled) {
+      dispatchMutationsWithDiagnostics(mutations);
+      return;
+    }
+
     for (const observer of [...sharedMutationObservers]) {
       if (!observer.active) continue;
       const matchingMutations = mutations.filter((mutation) =>
@@ -256,12 +597,7 @@
       if (!matchingMutations.length) continue;
 
       try {
-        runWithDiagnostics(
-          observer.ownerId,
-          "mutation",
-          matchingMutations.length,
-          () => observer.callback(matchingMutations, observer),
-        );
+        observer.callback(matchingMutations, observer);
       } catch (error) {
         reportModuleError(
           observer.ownerId,
@@ -272,6 +608,97 @@
     }
   }
 
+  function snapshotLogicalMutationObservers(activeObservers) {
+    return new Map(
+      activeObservers.map((observer) => [
+        observer,
+        {
+          observer,
+          generation: observer.generation,
+          registrations: cloneLogicalMutationRegistrations(
+            observer.registrations,
+          ),
+        },
+      ]),
+    );
+  }
+
+  function dispatchPreservedMutationBatch({ records, observerStates }) {
+    const dispatch = () => {
+      for (const state of observerStates) {
+        const { observer } = state;
+        if (
+          !observer.active ||
+          observer.generation !== state.generation
+        ) {
+          continue;
+        }
+
+        const filter = () =>
+          records.filter((mutation) => mutationMatches(state, mutation));
+        const matchingMutations = DIAGNOSTICS.enabled
+          ? runWithDiagnostics(
+              observer.ownerId,
+              "mutation:filter",
+              records.length,
+              filter,
+            )
+          : filter();
+        if (!matchingMutations.length) continue;
+
+        try {
+          if (DIAGNOSTICS.enabled) {
+            runWithDiagnostics(
+              observer.ownerId,
+              "mutation",
+              matchingMutations.length,
+              () => observer.callback(matchingMutations, observer),
+            );
+          } else {
+            observer.callback(matchingMutations, observer);
+          }
+        } catch (error) {
+          reportModuleError(
+            observer.ownerId,
+            "mutation observer callback",
+            error,
+          );
+        }
+      }
+    };
+
+    if (DIAGNOSTICS.enabled) {
+      runWithDiagnostics(
+        "suite",
+        "mutation:preserved-dispatch",
+        records.length,
+        dispatch,
+      );
+    } else {
+      dispatch();
+    }
+  }
+
+  function preserveNativeMutationRecords(records) {
+    if (!records.length) return;
+    const observerStates = [...nativeLogicalObserverStates.values()].filter(
+      ({ observer, generation }) =>
+        observer.active && observer.generation === generation,
+    );
+    if (!observerStates.length) return;
+
+    preservedMutationBatches.push({ records, observerStates });
+    if (preservedMutationFlushPending) return;
+    preservedMutationFlushPending = true;
+    queueMicrotask(flushPreservedMutationBatches);
+  }
+
+  function flushPreservedMutationBatches() {
+    preservedMutationFlushPending = false;
+    const batches = preservedMutationBatches.splice(0);
+    batches.forEach(dispatchPreservedMutationBatch);
+  }
+
   function requestMutationRefresh() {
     mutationRefreshPending = true;
     if (!batchDepth) refreshNativeMutationObserver();
@@ -279,45 +706,49 @@
 
   function refreshNativeMutationObserver() {
     mutationRefreshPending = false;
-    nativeMutationObserver?.disconnect();
-    nativeMutationObserver = null;
-
     const activeObservers = [...sharedMutationObservers].filter(
       (observer) => observer.active,
     );
-    if (!activeObservers.length) return;
-
-    const attributes = activeObservers.some(
-      (observer) => observer.options.attributes,
-    );
-    const observeAllAttributes = activeObservers.some(
-      (observer) =>
-        observer.options.attributes && !observer.options.attributeFilter,
-    );
-    const attributeFilter = observeAllAttributes
-      ? undefined
-      : [
-          ...new Set(
-            activeObservers.flatMap(
-              (observer) => observer.options.attributeFilter || [],
-            ),
-          ),
-        ];
-    const options = {
-      attributes,
-      childList: activeObservers.some((observer) => observer.options.childList),
-      characterData: activeObservers.some(
-        (observer) => observer.options.characterData,
-      ),
-      subtree: activeObservers.some((observer) => observer.options.subtree),
-    };
-    if (attributes && attributeFilter?.length) {
-      options.attributeFilter = attributeFilter;
+    if (!activeObservers.length) {
+      nativeMutationObserver?.disconnect();
+      nativeMutationObserver = null;
+      nativeMutationCoverage = null;
+      nativeLogicalObserverStates = new Map();
+      return;
     }
 
-    nativeMutationObserver = new NativeMutationObserver(dispatchMutations);
-    const targets = new Set(activeObservers.map((observer) => observer.target));
-    targets.forEach((target) => nativeMutationObserver.observe(target, options));
+    const requestedCoverage = buildMutationCoverage(activeObservers);
+    const requestedLogicalObserverStates =
+      snapshotLogicalMutationObservers(activeObservers);
+    if (
+      nativeMutationObserver &&
+      mutationCoverageCovers(nativeMutationCoverage, requestedCoverage)
+    ) {
+      preserveNativeMutationRecords(nativeMutationObserver.takeRecords());
+      nativeLogicalObserverStates = requestedLogicalObserverStates;
+      return;
+    }
+
+    if (nativeMutationObserver) {
+      preserveNativeMutationRecords(nativeMutationObserver.takeRecords());
+      nativeMutationObserver.disconnect();
+    }
+    nativeMutationObserver = null;
+    nativeMutationCoverage = null;
+    nativeLogicalObserverStates = new Map();
+
+    const replacementObserver = new NativeMutationObserver(dispatchMutations);
+    try {
+      requestedCoverage.targets.forEach((target) =>
+        replacementObserver.observe(target, requestedCoverage.options),
+      );
+    } catch (error) {
+      replacementObserver.disconnect();
+      throw error;
+    }
+    nativeMutationObserver = replacementObserver;
+    nativeMutationCoverage = requestedCoverage;
+    nativeLogicalObserverStates = requestedLogicalObserverStates;
   }
 
   class SharedMutationObserver {
@@ -327,22 +758,25 @@
       }
       this.callback = callback;
       this.ownerId = activeModuleId;
-      this.target = null;
-      this.options = null;
+      this.registrations = new Map();
       this.active = false;
+      this.generation = 0;
       sharedMutationObservers.add(this);
     }
 
     observe(target, options) {
-      this.target = target;
-      this.options = { ...options };
+      const wasActive = this.active;
+      setLogicalMutationRegistration(this.registrations, target, options);
+      if (!wasActive) this.generation += 1;
       this.active = true;
       requestMutationRefresh();
     }
 
     disconnect() {
       if (!this.active) return;
+      clearLogicalMutationRegistrations(this.registrations);
       this.active = false;
+      this.generation += 1;
       requestMutationRefresh();
     }
 
@@ -512,7 +946,7 @@
 
   suite.registerModule(
     "commentCleaner",
-    "Comment Cleaner v1.14",
+    "Comment Cleaner v1.15",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -556,6 +990,9 @@
           "yt-comment-view-model #vote-count-middle",
           "yt-comment-view-model like-button-view-model",
           "yt-comment-view-model dislike-button-view-model",
+          "yt-comment-view-model #reply-button-end",
+          "yt-comment-view-model #action-menu",
+          "yt-comment-view-model ytd-menu-renderer",
           "ytd-comments #reply-dialog",
           "ytd-comments #simple-box",
           "ytd-comments #teaser-carousel",
@@ -565,6 +1002,9 @@
           "ytd-comment-view-model #reply-dialog",
           "ytd-comment-view-model #simple-box",
           "ytd-comment-view-model #teaser-carousel",
+          "yt-comment-view-model #reply-dialog",
+          "yt-comment-view-model #simple-box",
+          "yt-comment-view-model #teaser-carousel",
         ];
 
         const COMMENT_CONTROL_SELECTOR = COMMENT_CONTROL_SELECTORS.join(",");
@@ -576,6 +1016,9 @@
           'ytd-comment-view-model yt-icon-button > button#button[aria-label*="Action menu" i]',
           'ytd-comment-view-model yt-icon-button > button#button[aria-label*="More actions" i]',
           'ytd-comment-view-model yt-icon-button > button#button[aria-label*="More options" i]',
+          'yt-comment-view-model yt-icon-button > button#button[aria-label*="Action menu" i]',
+          'yt-comment-view-model yt-icon-button > button#button[aria-label*="More actions" i]',
+          'yt-comment-view-model yt-icon-button > button#button[aria-label*="More options" i]',
         ];
 
         const COMMENT_OVERFLOW_BUTTON_SELECTOR =
@@ -595,6 +1038,7 @@
           "ytd-comment-thread-renderer",
           "ytd-comment-renderer",
           "ytd-comment-view-model",
+          "yt-comment-view-model",
           "ytd-comment-replies-renderer",
         ].join(",");
         const UPLOADER_SOURCE_SELECTOR = [
@@ -909,18 +1353,21 @@
           return `
       /* Tighten comment spacing */
       ytd-comment-renderer #main,
-      ytd-comment-view-model #main {
+      ytd-comment-view-model #main,
+      yt-comment-view-model #main {
         margin:0 !important;
       }
 
       ytd-comment-renderer #body,
-      ytd-comment-view-model #body {
+      ytd-comment-view-model #body,
+      yt-comment-view-model #body {
         margin:0 !important;
         padding:0 !important;
       }
 
       ytd-comment-renderer #footer,
-      ytd-comment-view-model #footer {
+      ytd-comment-view-model #footer,
+      yt-comment-view-model #footer {
         margin:0 !important;
         padding:0 !important;
       }
@@ -949,7 +1396,10 @@
       ytd-comment-renderer #pinned-comment-badge yt-formatted-string,
       ytd-comment-view-model #pinned-comment-badge,
       ytd-comment-view-model #pinned-comment-badge a,
-      ytd-comment-view-model #pinned-comment-badge yt-formatted-string {
+      ytd-comment-view-model #pinned-comment-badge yt-formatted-string,
+      yt-comment-view-model #pinned-comment-badge,
+      yt-comment-view-model #pinned-comment-badge a,
+      yt-comment-view-model #pinned-comment-badge yt-formatted-string {
         color:var(--uploader-orange) !important;
         -webkit-text-fill-color:var(--uploader-orange) !important;
         background:transparent !important;
@@ -975,7 +1425,9 @@
       ytd-comment-renderer #header-badge,
       ytd-comment-renderer #header-author-badges,
       ytd-comment-view-model #header-badge,
-      ytd-comment-view-model #header-author-badges {
+      ytd-comment-view-model #header-author-badges,
+      yt-comment-view-model #header-badge,
+      yt-comment-view-model #header-author-badges {
         background:transparent !important;
       }
       `;
@@ -1219,7 +1671,7 @@
 
   suite.registerModule(
     "feedUiCleaner",
-    "Feed UI Cleaner v2.3",
+    "Feed UI Cleaner v2.5",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -1229,7 +1681,15 @@
 
         const CONFIG = {
           hideStaticUi: true,
-          tightenFeedGrid: true
+          tightenFeedGrid: true,
+          filterProfiles: {
+            default: { mixes: true, membersOnly: true, podcasts: true },
+            home: { mixes: true, membersOnly: true, podcasts: true },
+            subscriptions: { mixes: true, membersOnly: true, podcasts: true },
+            search: { mixes: true, membersOnly: true, podcasts: true },
+            history: { mixes: true, membersOnly: true, podcasts: true },
+          },
+          showTemporaryRevealControl: true,
         };
 
         const STATIC_HIDE_SELECTORS = [
@@ -1292,8 +1752,9 @@
           'ytd-playlist-video-renderer',
           'ytm-rich-item-renderer',
           'ytm-video-with-context-renderer',
-          'yt-horizontal-list-renderer',
-          'yt-collection-stack',
+          'ytd-ad-slot-renderer',
+          'ytd-display-ad-renderer',
+          'ytd-promoted-sparkles-web-renderer',
         ].join(',');
 
         const INNER_CONTAINER_SELECTORS = [
@@ -1319,11 +1780,22 @@
         const FEED_SURFACE_SELECTOR = [
           'ytd-browse ytd-rich-grid-renderer',
           'ytd-two-column-browse-results-renderer ytd-rich-grid-renderer',
+          'ytd-two-column-search-results-renderer #contents',
         ].join(',');
 
         const FEED_CONTENTS_SELECTOR = 'ytd-browse ytd-rich-grid-renderer #contents.ytd-rich-grid-renderer';
 
         const HIDDEN_FLAG = 'data-clean-up-youtube-hidden';
+        const HIDDEN_REASON_ATTRIBUTE = 'data-clean-up-youtube-reason';
+        const PERMANENT_HIDDEN_FLAG = 'data-clean-up-youtube-permanent-hidden';
+        const FILTER_REVEAL_ATTRIBUTE = 'data-yt-master-show-filtered';
+        const FILTER_TOGGLE_ID = 'yt-master-filter-toggle';
+        const FILTERED_CARD_SELECTOR = [
+          `[${HIDDEN_FLAG}="1"]`,
+          '[data-ytppl-upcoming-hidden="1"]',
+          '[data-ytppl-pay-to-watch-hidden="1"]',
+          '[data-ytppl-watched-hidden="1"]',
+        ].join(',');
 
         function getText(el) {
           return el ? el.textContent.replace(/\s+/g, ' ').trim() : '';
@@ -1345,12 +1817,69 @@
           return /members only/i.test(getText(el));
         }
 
+        function getFilterProfileName() {
+          if (location.pathname === '/' || location.pathname === '/feed/recommended') {
+            return 'home';
+          }
+          if (location.pathname === '/feed/subscriptions') {
+            return 'subscriptions';
+          }
+          if (location.pathname === '/results') {
+            return 'search';
+          }
+          if (location.pathname === '/feed/history') {
+            return 'history';
+          }
+          return 'default';
+        }
+
+        function getFilterProfile() {
+          const profiles = CONFIG.filterProfiles || {};
+          return profiles[getFilterProfileName()] || profiles.default || {};
+        }
+
+        function isRuntimeFeedRoute() {
+          return !(
+            location.pathname === '/watch' ||
+            location.pathname.startsWith('/live/') ||
+            location.pathname.startsWith('/shorts/')
+          );
+        }
+
         const CARD_FILTERS = [
-          { selector: MIX_BADGE_SELECTOR, matches: isMixBadge },
-          { selector: MEMBERS_ONLY_SELECTOR, matches: isMembersOnlyMatch },
-          { selector: PODCAST_LINK_SELECTOR, matches: isFullPodcastLink },
-          { selector: AD_SLOT_SELECTOR, matches: () => true },
+          {
+            key: 'mixes',
+            reason: 'Mix',
+            selector: MIX_BADGE_SELECTOR,
+            matches: isMixBadge,
+          },
+          {
+            key: 'membersOnly',
+            reason: 'Members only',
+            selector: MEMBERS_ONLY_SELECTOR,
+            matches: isMembersOnlyMatch,
+          },
+          {
+            key: 'podcasts',
+            reason: 'Podcast',
+            selector: PODCAST_LINK_SELECTOR,
+            matches: isFullPodcastLink,
+          },
+          {
+            key: 'advertisement',
+            reason: 'Advertisement',
+            selector: AD_SLOT_SELECTOR,
+            matches: () => true,
+            permanent: true,
+          },
         ];
+        const FILTER_MUTATION_TRIGGER_SELECTOR = [
+          MIX_BADGE_SELECTOR,
+          MEMBERS_ONLY_SELECTOR,
+          PODCAST_LINK_SELECTOR,
+          `[${HIDDEN_FLAG}]`,
+          `[${PERMANENT_HIDDEN_FLAG}]`,
+        ].join(',');
 
         function buildHideCss(selectors) {
           return `
@@ -1376,21 +1905,52 @@
         `;
         }
 
+        function buildFilteredCardCss() {
+          return `
+          [${PERMANENT_HIDDEN_FLAG}="1"] {
+            display: none !important;
+          }
+
+          :root:not([${FILTER_REVEAL_ATTRIBUTE}="1"]) [${HIDDEN_FLAG}="1"] {
+            display: none !important;
+          }
+
+          #${FILTER_TOGGLE_ID} {
+            position: fixed !important;
+            bottom: 16px !important;
+            left: 16px !important;
+            z-index: 2200 !important;
+            border: 1px solid var(--yt-spec-10-percent-layer, rgba(255,255,255,.2)) !important;
+            border-radius: 18px !important;
+            padding: 7px 12px !important;
+            background: var(--yt-spec-raised-background, #272727) !important;
+            color: var(--yt-spec-text-primary, #fff) !important;
+            cursor: pointer !important;
+            font: 500 12px/16px Roboto, Arial, sans-serif !important;
+            box-shadow: 0 2px 8px rgba(0,0,0,.3) !important;
+          }
+
+          #${FILTER_TOGGLE_ID}:focus-visible {
+            outline: 2px solid var(--yt-spec-call-to-action, #3ea6ff) !important;
+            outline-offset: 2px !important;
+          }
+        `;
+        }
+
         function buildCss() {
           return [
             buildStaticCss(),
             buildFeedGridCss(),
+            buildFilteredCardCss(),
           ].filter(css => css.trim()).join('\n');
         }
 
-        function hideContainer(el) {
-          const container = el.closest(OUTER_CONTAINER_SELECTORS) || el.closest(INNER_CONTAINER_SELECTORS);
-          if (!container || container.hasAttribute(HIDDEN_FLAG)) return false;
-          if (isInsideExcludedSurface(container)) return false;
-
-          container.style.setProperty('display', 'none', 'important');
-          container.setAttribute(HIDDEN_FLAG, '1');
-          return true;
+        function getCardContainer(el) {
+          return (
+            el?.closest?.(OUTER_CONTAINER_SELECTORS) ||
+            el?.closest?.(INNER_CONTAINER_SELECTORS) ||
+            null
+          );
         }
 
         function collectMatchingElements(root, selector) {
@@ -1404,30 +1964,190 @@
           return elements;
         }
 
-        function hideMatchingCards(root = document) {
-          let changed = false;
+        function addContainerMatch(matchesByContainer, el, filter) {
+          if (isInsideExcludedSurface(el) || !filter.matches(el)) return;
 
-          CARD_FILTERS.forEach(({ selector, matches }) => {
-            collectMatchingElements(root, selector).forEach((el) => {
-              if (isInsideExcludedSurface(el) || !matches(el)) return;
-              changed = hideContainer(el) || changed;
-            });
+          const container = getCardContainer(el);
+          if (!container || isInsideExcludedSurface(container)) return;
+
+          const current = matchesByContainer.get(container) || {
+            permanent: false,
+            reasons: new Set(),
+          };
+          current.permanent ||= Boolean(filter.permanent);
+          current.reasons.add(filter.reason);
+          matchesByContainer.set(container, current);
+        }
+
+        function addPreviouslyFilteredContainers(containers, root) {
+          collectMatchingElements(
+            root,
+            `[${HIDDEN_FLAG}], [${PERMANENT_HIDDEN_FLAG}]`,
+          ).forEach((container) => containers.add(container));
+
+          const rootElement = root?.nodeType === Node.ELEMENT_NODE ? root : null;
+          const closest = rootElement?.closest?.(
+            `[${HIDDEN_FLAG}], [${PERMANENT_HIDDEN_FLAG}]`,
+          );
+          if (closest) containers.add(closest);
+        }
+
+        function reconcileFilteredCards(root = document) {
+          const matchesByContainer = new Map();
+          const containers = new Set();
+          const profile = getFilterProfile();
+
+          CARD_FILTERS.forEach((filter) => {
+            if (!filter.permanent && profile[filter.key] === false) return;
+
+            collectMatchingElements(root, filter.selector).forEach((el) =>
+              addContainerMatch(matchesByContainer, el, filter),
+            );
           });
 
-          return changed;
+          matchesByContainer.forEach((_match, container) => containers.add(container));
+          addPreviouslyFilteredContainers(containers, root);
+
+          containers.forEach((container) => {
+            const match = matchesByContainer.get(container);
+            if (!match) {
+              container.removeAttribute(HIDDEN_FLAG);
+              container.removeAttribute(HIDDEN_REASON_ATTRIBUTE);
+              container.removeAttribute(PERMANENT_HIDDEN_FLAG);
+              return;
+            }
+
+            const reasons = [...match.reasons].sort().join(', ');
+            if (match.permanent) {
+              container.setAttribute(PERMANENT_HIDDEN_FLAG, '1');
+              container.removeAttribute(HIDDEN_FLAG);
+            } else {
+              container.setAttribute(HIDDEN_FLAG, '1');
+              container.removeAttribute(PERMANENT_HIDDEN_FLAG);
+            }
+            container.setAttribute(HIDDEN_REASON_ATTRIBUTE, reasons);
+          });
         }
 
         function cleanUp(root = document) {
           const rootElement =
             root && root.nodeType === Node.ELEMENT_NODE ? root : null;
           if (rootElement && rootElement.closest(FEED_SURFACE_SELECTOR)) {
-            hideMatchingCards(rootElement);
+            reconcileFilteredCards(rootElement);
+            scheduleFilterToggleUpdate();
             return;
           }
 
           collectMatchingElements(root, FEED_SURFACE_SELECTOR).forEach((surface) => {
-            hideMatchingCards(surface);
+            reconcileFilteredCards(surface);
           });
+          scheduleFilterToggleUpdate();
+        }
+
+        let filterToggleUpdateScheduled = false;
+
+        function getFilteredContainers() {
+          const containers = new Set();
+          document.querySelectorAll(FEED_SURFACE_SELECTOR).forEach((surface) => {
+            surface.querySelectorAll(FILTERED_CARD_SELECTOR).forEach((container) => {
+              if (
+                !container.closest(`[${PERMANENT_HIDDEN_FLAG}="1"]`) &&
+                !isInsideExcludedSurface(container)
+              ) {
+                containers.add(container);
+              }
+            });
+          });
+          return containers;
+        }
+
+        function getFilteredReasonSummary(containers) {
+          const counts = new Map();
+          const markerReasons = [
+            ['data-ytppl-upcoming-hidden', 'Upcoming'],
+            ['data-ytppl-pay-to-watch-hidden', 'Pay to watch'],
+            ['data-ytppl-watched-hidden', 'Watched'],
+          ];
+
+          containers.forEach((container) => {
+            const reasons = new Set(
+              String(container.getAttribute(HIDDEN_REASON_ATTRIBUTE) || '')
+                .split(',')
+                .map((reason) => reason.trim())
+                .filter(Boolean),
+            );
+            markerReasons.forEach(([attribute, reason]) => {
+              if (container.getAttribute(attribute) === '1') reasons.add(reason);
+            });
+            reasons.forEach((reason) => counts.set(reason, (counts.get(reason) || 0) + 1));
+          });
+
+          return [...counts.entries()]
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([reason, count]) => `${reason}: ${count}`)
+            .join(', ');
+        }
+
+        function setFilteredItemsRevealed(revealed) {
+          const root = document.documentElement;
+          if (
+            !root ||
+            (root.getAttribute(FILTER_REVEAL_ATTRIBUTE) === '1') === revealed
+          ) return;
+
+          if (revealed) {
+            root.setAttribute(FILTER_REVEAL_ATTRIBUTE, '1');
+          } else {
+            root.removeAttribute(FILTER_REVEAL_ATTRIBUTE);
+          }
+          scheduleFilterToggleUpdate();
+        }
+
+        function updateFilterToggle() {
+          filterToggleUpdateScheduled = false;
+          const existing = document.getElementById(FILTER_TOGGLE_ID);
+          if (!CONFIG.showTemporaryRevealControl || !isRuntimeFeedRoute()) {
+            existing?.remove();
+            setFilteredItemsRevealed(false);
+            return;
+          }
+
+          const containers = getFilteredContainers();
+          if (!containers.size) {
+            existing?.remove();
+            setFilteredItemsRevealed(false);
+            return;
+          }
+
+          const revealed =
+            document.documentElement?.getAttribute(FILTER_REVEAL_ATTRIBUTE) === '1';
+          const button = existing || document.createElement('button');
+          button.id = FILTER_TOGGLE_ID;
+          button.type = 'button';
+          button.setAttribute('aria-pressed', String(Boolean(revealed)));
+          button.textContent = `Filtered: ${containers.size} · ${revealed ? 'Hide' : 'Show'}`;
+          const reasons = getFilteredReasonSummary(containers);
+          button.title = reasons || `${containers.size} filtered items`;
+          if (!existing) {
+            button.addEventListener('click', () => {
+              const root = document.documentElement;
+              setFilteredItemsRevealed(
+                root?.getAttribute(FILTER_REVEAL_ATTRIBUTE) !== '1',
+              );
+            });
+            (document.body || document.documentElement).appendChild(button);
+          }
+        }
+
+        function scheduleFilterToggleUpdate() {
+          if (filterToggleUpdateScheduled) return;
+          filterToggleUpdateScheduled = true;
+          requestAnimationFrame(updateFilterToggle);
+        }
+
+        function resetTemporaryReveal() {
+          document.documentElement?.removeAttribute(FILTER_REVEAL_ATTRIBUTE);
+          document.getElementById(FILTER_TOGGLE_ID)?.remove();
         }
 
         let scheduled = false;
@@ -1466,17 +2186,64 @@
               ? node
               : node && node.parentElement;
           if (!element) return null;
+          if (isInsideExcludedSurface(element)) return null;
 
-          if (element.closest(FEED_SURFACE_SELECTOR)) return element;
+          if (element.closest(FEED_SURFACE_SELECTOR)) {
+            return getCardContainer(element) || element;
+          }
           if (element.querySelector(FEED_SURFACE_SELECTOR)) return element;
           return null;
+        }
+
+        function getMutationCleanUpRoot(mutation) {
+          const element =
+            mutation.target?.nodeType === Node.ELEMENT_NODE
+              ? mutation.target
+              : mutation.target?.parentElement;
+          if (!element) return null;
+
+          const card = getCardContainer(element);
+          if (card?.closest(FEED_SURFACE_SELECTOR)) return card;
+          if (element.closest(FEED_SURFACE_SELECTOR)) return element;
+          return null;
+        }
+
+        function mutationCanAffectFiltering(mutation) {
+          if (mutation.type === 'childList') return true;
+
+          const element =
+            mutation.target?.nodeType === Node.ELEMENT_NODE
+              ? mutation.target
+              : mutation.target?.parentElement;
+          if (!element) return false;
+
+          if (
+            mutation.type === 'attributes' &&
+            mutation.attributeName?.startsWith('data-ytppl-')
+          ) {
+            return true;
+          }
+
+          return Boolean(element.closest(FILTER_MUTATION_TRIGGER_SELECTOR));
         }
 
         GM_addStyle(buildCss());
         cleanUp(document);
 
         const observer = new MutationObserver((mutations) => {
+          if (!isRuntimeFeedRoute()) return;
+
           for (const mutation of mutations) {
+            if (!mutationCanAffectFiltering(mutation)) continue;
+
+            if (mutation.type !== 'childList') {
+              const cleanUpRoot = getMutationCleanUpRoot(mutation);
+              if (cleanUpRoot) scheduleCleanUp(cleanUpRoot);
+              continue;
+            }
+
+            const mutationRoot = getMutationCleanUpRoot(mutation);
+            if (mutationRoot) scheduleCleanUp(mutationRoot);
             if (!mutation.addedNodes || !mutation.addedNodes.length) continue;
 
             mutation.addedNodes.forEach((node) => {
@@ -1486,9 +2253,28 @@
           }
         });
 
-        observer.observe(document.documentElement, { childList: true, subtree: true });
+        observer.observe(document.documentElement, {
+          attributeFilter: [
+            'href',
+            'data-ytppl-upcoming-hidden',
+            'data-ytppl-pay-to-watch-hidden',
+            'data-ytppl-watched-hidden',
+          ],
+          attributes: true,
+          characterData: true,
+          childList: true,
+          subtree: true,
+        });
 
-        suite.addWindowListener('yt-navigate-finish', () => cleanUp(document), true);
+        suite.addWindowListener('yt-navigate-start', resetTemporaryReveal, true);
+        suite.addWindowListener('yt-navigate-finish', () => {
+          resetTemporaryReveal();
+          cleanUp(document);
+        }, true);
+        suite.addWindowListener('pageshow', () => {
+          resetTemporaryReveal();
+          cleanUp(document);
+        }, true);
     },
   );
 
@@ -1857,7 +2643,7 @@
 
   suite.registerModule(
     "pageCoherence",
-    "Page Coherence Guard v1.1",
+    "Page Coherence Guard v1.2",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -1869,12 +2655,16 @@
           checkDelaysMs: [600, 1600, 3200],
           mismatchesBeforeWarning: 2,
           eventHistoryLimit: 20,
+          queueBackupItemLimit: 100,
+          queueTitleLengthLimit: 500,
+          queueUrlLengthLimit: 2048,
         });
         const STYLE_ID = "yt-page-coherence-style";
         const STALE_ATTRIBUTE = "data-yt-master-page-stale";
         const STATE_ATTRIBUTE = "data-yt-master-state";
         const EVENTS_ATTRIBUTE = "data-yt-master-events";
         const NOTICE_ID = "yt-master-page-coherence-notice";
+        const QUEUE_BACKUP_KEY = "yt-master-page-coherence-queue-backup-v1";
         const COMMENTS_STALE_ATTRIBUTE = "data-iow-stale-video";
         const COMMENT_VIDEO_LINK_SELECTOR =
           'a[href*="/watch?"][href*="lc="], a[href*="youtube.com/watch?"][href*="lc="]';
@@ -1885,6 +2675,14 @@
           "yt-playlist-panel-video-renderer[selected]",
           'yt-playlist-panel-video-renderer[aria-selected="true"]',
           'yt-playlist-panel-video-renderer[aria-current="true"]',
+        ].join(",");
+        const QUEUE_RENDERER_SELECTOR = [
+          "ytd-playlist-panel-video-renderer",
+          "yt-playlist-panel-video-renderer",
+        ].join(",");
+        const QUEUE_PANEL_SELECTOR = [
+          "ytd-playlist-panel-renderer",
+          "yt-playlist-panel-renderer",
         ].join(",");
         const METADATA_TITLE_SELECTOR = [
           "ytd-watch-metadata h1 yt-formatted-string",
@@ -1941,6 +2739,88 @@
           };
         };
 
+        const getIdentityState = ({
+          watchPath,
+          urlVideoId,
+          playerVideoId,
+          flexyVideoId,
+          queueVideoId,
+        }) => {
+          if (!watchPath) {
+            return {
+              status: "not-watch-page",
+              reasons: ["not-watch-page"],
+              comparisons: {},
+            };
+          }
+
+          const pendingReasons = [];
+          if (!urlVideoId) pendingReasons.push("url-video-id-pending");
+          if (!playerVideoId) pendingReasons.push("player-video-id-pending");
+          if (!flexyVideoId) pendingReasons.push("flexy-video-id-pending");
+
+          const comparisons = {};
+          const disagreementReasons = [];
+          const compare = (name, leftId, rightId, disagreementReason) => {
+            if (!leftId || !rightId) {
+              comparisons[name] = null;
+              return;
+            }
+
+            const agrees = leftId === rightId;
+            comparisons[name] = agrees;
+            if (!agrees) disagreementReasons.push(disagreementReason);
+          };
+
+          compare(
+            "urlPlayer",
+            urlVideoId,
+            playerVideoId,
+            "url-player-disagreement",
+          );
+          compare(
+            "urlFlexy",
+            urlVideoId,
+            flexyVideoId,
+            "url-flexy-disagreement",
+          );
+          compare(
+            "playerFlexy",
+            playerVideoId,
+            flexyVideoId,
+            "player-flexy-disagreement",
+          );
+          compare(
+            "queueUrl",
+            queueVideoId,
+            urlVideoId,
+            "selected-queue-url-disagreement",
+          );
+          compare(
+            "queuePlayer",
+            queueVideoId,
+            playerVideoId,
+            "selected-queue-player-disagreement",
+          );
+          compare(
+            "queueFlexy",
+            queueVideoId,
+            flexyVideoId,
+            "selected-queue-flexy-disagreement",
+          );
+
+          const reasons = [...disagreementReasons, ...pendingReasons];
+          return {
+            status: disagreementReasons.length
+              ? "disagreement"
+              : pendingReasons.length
+                ? "pending"
+                : "coherent",
+            reasons: reasons.length ? reasons : ["all-available-identities-agree"],
+            comparisons,
+          };
+        };
+
         const getCommentVideoIds = (comments) => {
           if (!comments) return [];
 
@@ -1962,8 +2842,16 @@
           const urlVideoId = getVideoIdFromUrl(location.href);
           const playerVideoId = playerData.video_id || "";
           const flexyVideoId = getFlexyVideoId();
+          const watchPath = isWatchPath();
+          const identity = getIdentityState({
+            watchPath,
+            urlVideoId,
+            playerVideoId,
+            flexyVideoId,
+            queueVideoId: queue.videoId,
+          });
           const confirmedMismatch = Boolean(
-            isWatchPath() &&
+            watchPath &&
               urlVideoId &&
               playerVideoId &&
               flexyVideoId &&
@@ -1971,7 +2859,7 @@
               flexyVideoId !== playerVideoId,
           );
           const confirmedCoherent = Boolean(
-            !isWatchPath() ||
+            !watchPath ||
               (urlVideoId &&
                 playerVideoId &&
                 flexyVideoId &&
@@ -1991,6 +2879,9 @@
             flexyVideoId,
             queueVideoId: queue.videoId,
             queueTitle: queue.title,
+            identityStatus: identity.status,
+            identityReasons: identity.reasons,
+            identityComparisons: identity.comparisons,
             commentsPresent: Boolean(comments),
             commentsHiddenAsStale:
               comments?.getAttribute(COMMENTS_STALE_ATTRIBUTE) === "1",
@@ -2015,6 +2906,178 @@
           document.getElementById(NOTICE_ID)?.remove();
         };
 
+        const normaliseQueueUrl = (value) => {
+          if (!value) return "";
+
+          try {
+            const url = new URL(value, location.origin);
+            url.hash = "";
+            return url.href.slice(0, CONFIG.queueUrlLengthLimit);
+          } catch {
+            return "";
+          }
+        };
+
+        const captureQueue = () => {
+          const selectedItems = Array.from(
+            document.querySelectorAll(QUEUE_ITEM_SELECTOR),
+          );
+          const selectedItem =
+            selectedItems.find((candidate) => candidate.getClientRects().length > 0) ||
+            selectedItems[0];
+          const panel =
+            selectedItem?.closest(QUEUE_PANEL_SELECTOR) ||
+            Array.from(document.querySelectorAll(QUEUE_PANEL_SELECTOR)).find((candidate) =>
+              candidate.querySelector(QUEUE_RENDERER_SELECTOR),
+            );
+          const renderers = panel
+            ? Array.from(panel.querySelectorAll(QUEUE_RENDERER_SELECTOR))
+            : [];
+          const items = [];
+          let currentIndex = -1;
+
+          renderers.forEach((renderer) => {
+            const link = renderer.querySelector(
+              'a#wc-endpoint, a[href*="/watch?"], a[href^="/live/"]',
+            );
+            const url = normaliseQueueUrl(link?.href || link?.getAttribute("href"));
+            if (!url) return;
+
+            if (renderer === selectedItem) currentIndex = items.length;
+            items.push({
+              title: (
+                renderer.querySelector("#video-title")?.textContent?.trim() ||
+                link?.getAttribute("aria-label")?.trim() ||
+                "Untitled video"
+              ).slice(0, CONFIG.queueTitleLengthLimit),
+              url,
+            });
+          });
+
+          if (currentIndex < 0) {
+            const activeVideoId = getVideoIdFromUrl(location.href);
+            currentIndex = items.findIndex(
+              (item) => getVideoIdFromUrl(item.url) === activeVideoId,
+            );
+          }
+
+          return {
+            schemaVersion: 1,
+            capturedAt: new Date().toISOString(),
+            sourceUrl: location.href.slice(0, CONFIG.queueUrlLengthLimit),
+            currentIndex,
+            items,
+          };
+        };
+
+        const storeQueueBackup = (queue) => {
+          if (!queue.items.length) return false;
+
+          const boundedItems = queue.items.slice(0, CONFIG.queueBackupItemLimit);
+          const boundedQueue = {
+            ...queue,
+            sourceItemCount: queue.items.length,
+            truncated: queue.items.length > CONFIG.queueBackupItemLimit,
+            currentIndex:
+              queue.currentIndex >= 0 && queue.currentIndex < boundedItems.length
+                ? queue.currentIndex
+                : -1,
+            items: boundedItems,
+          };
+
+          try {
+            sessionStorage.setItem(QUEUE_BACKUP_KEY, JSON.stringify(boundedQueue));
+            return true;
+          } catch {
+            return false;
+          }
+        };
+
+        const formatQueue = (queue) => {
+          const currentPosition =
+            queue.currentIndex >= 0
+              ? `${queue.currentIndex + 1} of ${queue.items.length}`
+              : "unknown";
+          const lines = [
+            "YouTube queue backup",
+            `Captured: ${queue.capturedAt}`,
+            `Current item: ${currentPosition}`,
+            "",
+          ];
+
+          queue.items.forEach((item, index) => {
+            const marker = index === queue.currentIndex ? ">" : " ";
+            lines.push(`${marker} ${index + 1}. ${item.title}`, `  ${item.url}`);
+          });
+          return lines.join("\n");
+        };
+
+        const copyText = async (value) => {
+          if (navigator.clipboard?.writeText) {
+            try {
+              await navigator.clipboard.writeText(value);
+              return true;
+            } catch {
+              // Fall through to the document-command fallback.
+            }
+          }
+
+          const textarea = document.createElement("textarea");
+          textarea.value = value;
+          textarea.readOnly = true;
+          textarea.style.cssText =
+            "position:fixed;left:-9999px;top:0;opacity:0;pointer-events:none";
+          document.body.append(textarea);
+          textarea.select();
+
+          try {
+            return document.execCommand("copy");
+          } catch {
+            return false;
+          } finally {
+            textarea.remove();
+          }
+        };
+
+        const readJsonAttribute = (name) => {
+          const value = document.documentElement?.getAttribute(name);
+          if (!value) return null;
+
+          try {
+            return JSON.parse(value);
+          } catch {
+            return null;
+          }
+        };
+
+        const buildDiagnosticsExport = () => {
+          const state = readJsonAttribute(STATE_ATTRIBUTE);
+          const safeState = state && typeof state === "object" ? { ...state } : state;
+          if (safeState) delete safeState.commentVideoIds;
+
+          return JSON.stringify(
+            {
+              schemaVersion: 1,
+              capturedAt: new Date().toISOString(),
+              health: readJsonAttribute("data-yt-master-suite"),
+              runtimeErrors: readJsonAttribute("data-yt-master-runtime-errors"),
+              state: safeState,
+              events: readJsonAttribute(EVENTS_ATTRIBUTE),
+            },
+            null,
+            2,
+          );
+        };
+
+        const setNoticeFeedback = (notice, message, error = false) => {
+          const feedback = notice.querySelector(".yt-master-page-coherence-feedback");
+          if (!feedback) return;
+
+          feedback.textContent = message;
+          feedback.hidden = false;
+          feedback.toggleAttribute("data-error", error);
+        };
+
         const ensureNotice = () => {
           if (!stalePageData || !isWatchPath()) {
             removeNotice();
@@ -2032,19 +3095,104 @@
 
           notice = document.createElement("section");
           notice.id = NOTICE_ID;
-          notice.setAttribute("role", "status");
+          notice.setAttribute("role", "region");
+          notice.setAttribute("aria-labelledby", `${NOTICE_ID}-message`);
 
           const message = document.createElement("span");
+          message.id = `${NOTICE_ID}-message`;
+          message.className = "yt-master-page-coherence-message";
+          message.setAttribute("role", "status");
+          message.setAttribute("aria-live", "polite");
+          message.setAttribute("aria-atomic", "true");
           message.textContent =
             "YouTube did not update this video’s page details. The previous title and comments are hidden.";
 
-          const button = document.createElement("button");
-          button.type = "button";
-          button.textContent = "Reload page data";
-          button.title = "Reloading may reset a temporary queue";
-          button.addEventListener("click", () => location.reload());
+          const actions = document.createElement("div");
+          actions.className = "yt-master-page-coherence-actions";
 
-          notice.append(message, button);
+          const copyQueueButton = document.createElement("button");
+          copyQueueButton.type = "button";
+          copyQueueButton.textContent = "Copy queue";
+          copyQueueButton.addEventListener("click", async () => {
+            const queue = captureQueue();
+            if (!queue.items.length) {
+              setNoticeFeedback(notice, "No active queue was found.", true);
+              return;
+            }
+
+            copyQueueButton.disabled = true;
+            const backedUp = storeQueueBackup(queue);
+            const copied = await copyText(formatQueue(queue));
+            copyQueueButton.disabled = false;
+
+            if (copied && backedUp) {
+              setNoticeFeedback(
+                notice,
+                queue.items.length > CONFIG.queueBackupItemLimit
+                  ? `Queue copied; the first ${CONFIG.queueBackupItemLimit} items were backed up for this tab.`
+                  : "Queue copied and backed up for this tab.",
+              );
+            } else if (copied) {
+              setNoticeFeedback(
+                notice,
+                "Queue copied, but this tab blocked the session backup.",
+                true,
+              );
+            } else if (backedUp) {
+              setNoticeFeedback(
+                notice,
+                "Queue backed up for this tab, but clipboard copying failed.",
+                true,
+              );
+            } else {
+              setNoticeFeedback(notice, "Queue export failed.", true);
+            }
+          });
+
+          const copyDiagnosticsButton = document.createElement("button");
+          copyDiagnosticsButton.type = "button";
+          copyDiagnosticsButton.textContent = "Copy diagnostics";
+          copyDiagnosticsButton.addEventListener("click", async () => {
+            copyDiagnosticsButton.disabled = true;
+            const copied = await copyText(buildDiagnosticsExport());
+            copyDiagnosticsButton.disabled = false;
+            setNoticeFeedback(
+              notice,
+              copied ? "Diagnostics copied." : "Diagnostics clipboard copy failed.",
+              !copied,
+            );
+          });
+
+          const reloadButton = document.createElement("button");
+          reloadButton.type = "button";
+          reloadButton.textContent = "Reload page data";
+          reloadButton.title = "Reloading may reset a temporary queue";
+          reloadButton.addEventListener("click", () => {
+            const queue = captureQueue();
+            const backedUp = storeQueueBackup(queue);
+            setNoticeFeedback(
+              notice,
+              queue.items.length
+                ? backedUp
+                  ? queue.items.length > CONFIG.queueBackupItemLimit
+                    ? `First ${CONFIG.queueBackupItemLimit} queue items backed up. Reloading page data…`
+                    : "Queue backed up. Reloading page data…"
+                  : "Queue backup unavailable. Reloading page data…"
+                : "Reloading page data…",
+              queue.items.length > 0 && !backedUp,
+            );
+            setTimeout(() => location.reload(), 50);
+          });
+
+          const feedback = document.createElement("span");
+          feedback.className = "yt-master-page-coherence-feedback";
+          feedback.setAttribute("role", "status");
+          feedback.setAttribute("aria-live", "polite");
+          feedback.hidden = true;
+
+          actions.append(copyQueueButton, copyDiagnosticsButton, reloadButton);
+
+          notice.append(message, actions, feedback);
           parent.insertBefore(notice, metadata || parent.firstChild);
         };
 
@@ -2076,7 +3224,9 @@
           }
 
           if (stalePageData) ensureNotice();
-          return publishState(buildSnapshot());
+          snapshot.stalePageData = stalePageData;
+          snapshot.mismatchChecks = consecutiveMismatchChecks;
+          return publishState(snapshot);
         };
 
         const clearScheduledChecks = () => {
@@ -2109,6 +3259,9 @@
             urlVideoId: snapshot.urlVideoId,
             playerVideoId: snapshot.playerVideoId,
             flexyVideoId: snapshot.flexyVideoId,
+            queueVideoId: snapshot.queueVideoId,
+            identityStatus: snapshot.identityStatus,
+            identityReasons: snapshot.identityReasons,
           });
           if (navigationEvents.length > CONFIG.eventHistoryLimit) {
             navigationEvents.splice(0, navigationEvents.length - CONFIG.eventHistoryLimit);
@@ -2148,12 +3301,35 @@
             box-sizing: border-box !important;
             color: var(--yt-spec-text-primary, #fff) !important;
             display: flex !important;
+            flex-wrap: wrap !important;
             font: 500 14px/20px Roboto, Arial, sans-serif !important;
             gap: 12px !important;
             justify-content: space-between !important;
             margin: 12px 0 !important;
             padding: 12px 16px !important;
             width: 100% !important;
+          }
+
+          #${NOTICE_ID} .yt-master-page-coherence-message {
+            flex: 1 1 320px !important;
+          }
+
+          #${NOTICE_ID} .yt-master-page-coherence-actions {
+            display: flex !important;
+            flex: 0 1 auto !important;
+            flex-wrap: wrap !important;
+            gap: 8px !important;
+            justify-content: flex-end !important;
+          }
+
+          #${NOTICE_ID} .yt-master-page-coherence-feedback {
+            color: var(--yt-spec-text-secondary, #aaa) !important;
+            flex: 1 0 100% !important;
+            font: 400 12px/18px Roboto, Arial, sans-serif !important;
+          }
+
+          #${NOTICE_ID} .yt-master-page-coherence-feedback[data-error] {
+            color: var(--yt-spec-error-indicator, #ff4e45) !important;
           }
 
           #${NOTICE_ID} button {
@@ -2165,6 +3341,11 @@
             flex: 0 0 auto !important;
             font: 500 14px/20px Roboto, Arial, sans-serif !important;
             padding: 8px 14px !important;
+          }
+
+          #${NOTICE_ID} button:disabled {
+            cursor: wait !important;
+            opacity: 0.65 !important;
           }
         `;
 
@@ -2204,7 +3385,7 @@
 
   suite.registerModule(
     "playerPreferencesLite",
-    "Player Preferences Lite v1.33",
+    "Player Preferences Lite v1.39",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -2244,6 +3425,33 @@
           enablePlayerWheelVolume: true,
           requireRightMouseButtonForWheelVolume: true,
           wheelVolumeStep: 5,
+          feedFilterProfiles: {
+            default: {
+              upcomingStreams: true,
+              payToWatchCards: true,
+              watchedVideos: true,
+            },
+            home: {
+              upcomingStreams: true,
+              payToWatchCards: true,
+              watchedVideos: true,
+            },
+            subscriptions: {
+              upcomingStreams: true,
+              payToWatchCards: true,
+              watchedVideos: true,
+            },
+            search: {
+              upcomingStreams: true,
+              payToWatchCards: true,
+              watchedVideos: true,
+            },
+            history: {
+              upcomingStreams: true,
+              payToWatchCards: true,
+              watchedVideos: false,
+            },
+          },
         };
 
         const STYLE_ID = "ytppl-style";
@@ -2253,6 +3461,9 @@
         const EMPTY_RYD_ICON_ATTRIBUTE = "data-ytppl-empty-ryd-icon";
         const SHORTS_LINK_SELECTOR =
           'a[href^="/shorts/"], a[href*="youtube.com/shorts/"]';
+        const SHORTS_CONVERTED_ATTRIBUTE = "data-ytppl-shorts-converted";
+        const SHORTS_CONVERTED_LINK_SELECTOR =
+          `a[${SHORTS_CONVERTED_ATTRIBUTE}]`;
         const TOPBAR_LOGO_RENDERER_SELECTOR =
           "ytd-masthead ytd-topbar-logo-renderer";
         const FEED_CARD_CONTAINER_SELECTOR = [
@@ -2332,11 +3543,15 @@
           "ytd-playlist-panel-renderer #items",
           "ytd-engagement-panel-section-list-renderer",
         ].join(",");
-        const CARD_HIDE_DATASET_KEYS = [
-          "ytpplUpcomingHidden",
-          "ytpplPayToWatchHidden",
-          "ytpplWatchedHidden",
-        ];
+        const CARD_HIDE_ATTRIBUTES = Object.freeze({
+          ytpplUpcomingHidden: "data-ytppl-upcoming-hidden",
+          ytpplPayToWatchHidden: "data-ytppl-pay-to-watch-hidden",
+          ytpplWatchedHidden: "data-ytppl-watched-hidden",
+        });
+        const FILTER_REVEAL_ATTRIBUTE = "data-yt-master-show-filtered";
+        const CARD_HIDE_ATTRIBUTE_SELECTORS = Object.values(
+          CARD_HIDE_ATTRIBUTES,
+        ).map((attribute) => `[${attribute}="1"]`);
         // Keep the DOM marker and CSS selector in lockstep; YouTube custom elements
         // can expose non-standard style objects, so hiding is CSS-driven.
         const WATCH_ACTION_HIDDEN_DATASET_KEY = "ytpplActionHidden";
@@ -2395,6 +3610,7 @@
           "yt-lockup-view-model",
           "yt-lockup-view-model-wiz",
           SHORTS_LINK_SELECTOR,
+          SHORTS_CONVERTED_LINK_SELECTOR,
           TOPBAR_LOGO_RENDERER_SELECTOR,
           WATCH_ACTION_MUTATION_SELECTOR,
           "ytd-watch-flexy ytd-video-owner-renderer",
@@ -2539,6 +3755,28 @@
           return location.pathname === "/feed/history";
         }
 
+        function getFeedFilterProfileName() {
+          if (location.pathname === "/" || location.pathname === "/feed/recommended") {
+            return "home";
+          }
+          if (location.pathname === "/feed/subscriptions") {
+            return "subscriptions";
+          }
+          if (location.pathname === "/results") {
+            return "search";
+          }
+          if (isHistoryPath()) {
+            return "history";
+          }
+          return "default";
+        }
+
+        function isFeedFilterEnabled(setting) {
+          const profiles = CONFIG.feedFilterProfiles || {};
+          const profile = profiles[getFeedFilterProfileName()] || profiles.default;
+          return profile?.[setting] !== false;
+        }
+
         function isExcludedSurface(target) {
           return Boolean(closestElement(target, EXCLUDED_SURFACE_SELECTOR));
         }
@@ -2577,6 +3815,17 @@
           const url = new URL("/watch", location.origin);
           url.searchParams.set("v", shortId);
           return url.toString();
+        }
+
+        function getWatchIdFromUrl(rawUrl) {
+          let url;
+          try {
+            url = new URL(rawUrl, location.origin);
+          } catch {
+            return "";
+          }
+
+          return url.pathname === "/watch" ? url.searchParams.get("v") || "" : "";
         }
 
         function getElementText(el) {
@@ -2663,7 +3912,21 @@
             return;
           }
 
-          root.querySelectorAll(SHORTS_LINK_SELECTOR).forEach((link) => {
+          // YouTube recycles feed anchors. Keep a converted marker only while its
+          // current /watch target still represents the same Short.
+          collectMatchingElements(root, SHORTS_CONVERTED_LINK_SELECTOR).forEach(
+            (link) => {
+              const convertedId = link.getAttribute(SHORTS_CONVERTED_ATTRIBUTE) || "";
+              const watchId = getWatchIdFromUrl(
+                link.href || link.getAttribute("href"),
+              );
+              if (!convertedId || watchId !== convertedId) {
+                link.removeAttribute(SHORTS_CONVERTED_ATTRIBUTE);
+              }
+            },
+          );
+
+          collectMatchingElements(root, SHORTS_LINK_SELECTOR).forEach((link) => {
             if (isExcludedSurface(link)) {
               return;
             }
@@ -2675,8 +3938,8 @@
               return;
             }
 
+            link.setAttribute(SHORTS_CONVERTED_ATTRIBUTE, shortId);
             link.href = getWatchUrlForShort(shortId);
-            link.dataset.ytpplShortsConverted = "1";
           });
         }
 
@@ -2696,8 +3959,8 @@
           }
 
           const watchUrl = getWatchUrlForShort(shortId);
+          link.setAttribute(SHORTS_CONVERTED_ATTRIBUTE, shortId);
           link.href = watchUrl;
-          link.dataset.ytpplShortsConverted = "1";
 
           const opensOutsideCurrentTab =
             event.defaultPrevented ||
@@ -2752,24 +4015,31 @@
             return;
           }
 
-          const shouldHide = CARD_HIDE_DATASET_KEYS.some(
-            (key) => container.dataset[key] === "1",
-          );
-          container.hidden = shouldHide;
-
-          if (shouldHide) {
-            container.style.setProperty("display", "none", "important");
-          } else {
-            container.style.removeProperty("display");
-          }
         }
 
         function hideMatchingCards(root, enabled, selector, datasetKey, predicate) {
+          const attribute = CARD_HIDE_ATTRIBUTES[datasetKey];
+          const markerSelector = attribute ? `[${attribute}="1"]` : "";
+          const candidates = collectMatchingElements(root, selector);
+
+          if (markerSelector) {
+            collectMatchingElements(root, markerSelector).forEach((card) =>
+              candidates.add(card),
+            );
+            const rootElement =
+              root?.nodeType === Node.ELEMENT_NODE ? root : null;
+            const closestMarkedCard = rootElement?.closest?.(markerSelector);
+            if (closestMarkedCard) {
+              candidates.add(closestMarkedCard);
+            }
+          }
+
           if (!enabled) {
+            candidates.forEach((card) => setCardHidden(card, datasetKey, false));
             return;
           }
 
-          collectMatchingElements(root, selector).forEach((card) => {
+          candidates.forEach((card) => {
             setCardHidden(card, datasetKey, predicate(card));
           });
         }
@@ -2777,7 +4047,7 @@
         function hideUpcomingStreams(root = document) {
           hideMatchingCards(
             root,
-            CONFIG.hideUpcomingStreams,
+            CONFIG.hideUpcomingStreams && isFeedFilterEnabled("upcomingStreams"),
             UPCOMING_STREAM_SCAN_SELECTOR,
             "ytpplUpcomingHidden",
             isUpcomingStreamCard,
@@ -2810,7 +4080,7 @@
         function hidePayToWatchCards(root = document) {
           hideMatchingCards(
             root,
-            CONFIG.hidePayToWatchCards,
+            CONFIG.hidePayToWatchCards && isFeedFilterEnabled("payToWatchCards"),
             PAY_TO_WATCH_SCAN_SELECTOR,
             "ytpplPayToWatchHidden",
             isPayToWatchCard,
@@ -2957,18 +4227,19 @@
 
         function hideWatchedVideos(root = document) {
           if (isHistoryPath()) {
-            collectMatchingElements(
+            hideMatchingCards(
               root,
-              '[data-ytppl-watched-hidden="1"]',
-            ).forEach((card) => {
-              setCardHidden(card, "ytpplWatchedHidden", false);
-            });
+              false,
+              WATCHED_VIDEO_SCAN_SELECTOR,
+              "ytpplWatchedHidden",
+              isWatchedVideoCard,
+            );
             return;
           }
 
           hideMatchingCards(
             root,
-            CONFIG.hideWatchedVideos,
+            CONFIG.hideWatchedVideos && isFeedFilterEnabled("watchedVideos"),
             WATCHED_VIDEO_SCAN_SELECTOR,
             "ytpplWatchedHidden",
             isWatchedVideoCard,
@@ -3803,14 +5074,14 @@
         function setExpandedDescriptionCollapsed(expanded, collapsed) {
           if (collapsed) {
             expanded.dataset[DESCRIPTION_EXPANDED_COLLAPSED_DATASET_KEY] = "1";
-            expanded.style.setProperty("display", "none", "important");
-            expanded.style.setProperty("height", "0", "important");
-            expanded.style.setProperty("line-height", "0", "important");
-            expanded.style.setProperty("max-height", "0", "important");
-            expanded.style.setProperty("min-height", "0", "important");
-            expanded.style.setProperty("margin", "0", "important");
-            expanded.style.setProperty("overflow", "hidden", "important");
-            expanded.style.setProperty("padding", "0", "important");
+            setImportantStyleProperty(expanded, "display", "none");
+            setImportantStyleProperty(expanded, "height", "0px");
+            setImportantStyleProperty(expanded, "line-height", "0px");
+            setImportantStyleProperty(expanded, "max-height", "0px");
+            setImportantStyleProperty(expanded, "min-height", "0px");
+            setImportantStyleProperty(expanded, "margin", "0px");
+            setImportantStyleProperty(expanded, "overflow", "hidden");
+            setImportantStyleProperty(expanded, "padding", "0px");
             return;
           }
 
@@ -3831,38 +5102,20 @@
           ].forEach((property) => expanded.style.removeProperty(property));
         }
 
+        function setImportantStyleProperty(el, property, value) {
+          if (
+            el.style.getPropertyValue(property) === value &&
+            el.style.getPropertyPriority(property) === "important"
+          ) {
+            return;
+          }
+
+          el.style.setProperty(property, value, "important");
+        }
+
         function hasRenderedBox(el) {
           const rect = el.getBoundingClientRect();
           return rect.width > 0 && rect.height > 0;
-        }
-
-        function isVisibleDescriptionContentElement(el) {
-          if (!el || closestElement(el, DESCRIPTION_CONTROL_SELECTOR)) {
-            return false;
-          }
-
-          const style = getComputedStyle(el);
-          if (style.display === "none" || style.visibility === "hidden") {
-            return false;
-          }
-
-          return hasRenderedBox(el);
-        }
-
-        function getExpandedDescriptionContentHeight(expanded) {
-          const expandedRect = expanded.getBoundingClientRect();
-          let bottom = 0;
-
-          Array.from(expanded.children).forEach((child) => {
-            if (!isVisibleDescriptionContentElement(child)) {
-              return;
-            }
-
-            const rect = child.getBoundingClientRect();
-            bottom = Math.max(bottom, rect.bottom - expandedRect.top);
-          });
-
-          return bottom ? Math.ceil(bottom) + 1 : 0;
         }
 
         function getExpandedDescriptionHeightResetElements(expanded) {
@@ -3891,15 +5144,10 @@
           }
 
           getExpandedDescriptionHeightResetElements(expanded).forEach((el) => {
-            el.style.setProperty("height", "auto", "important");
-            el.style.setProperty("min-height", "0", "important");
+            setImportantStyleProperty(el, "height", "auto");
+            setImportantStyleProperty(el, "min-height", "0px");
           });
-          expanded.style.setProperty("max-height", "none", "important");
-
-          const contentHeight = getExpandedDescriptionContentHeight(expanded);
-          if (contentHeight) {
-            expanded.style.setProperty("height", `${contentHeight}px`, "important");
-          }
+          setImportantStyleProperty(expanded, "max-height", "none");
         }
 
         function collapseEmptyExpandedDescriptions(root = document) {
@@ -3979,15 +5227,16 @@
             return;
           }
 
-          const staticTextValue = getWatchInfoStaticText(row);
-          if (!staticTextValue) {
-            return;
-          }
-
           let staticText = row.querySelector(`.${WATCH_INFO_STATIC_TEXT_CLASS}`);
           const nativeContainer = row.querySelector(
             WATCH_INFO_NATIVE_CONTAINER_SELECTOR,
           );
+          const staticTextValue = getWatchInfoStaticText(row);
+          if (!staticTextValue) {
+            staticText?.remove();
+            nativeContainer?.removeAttribute(WATCH_INFO_NATIVE_HIDDEN_ATTRIBUTE);
+            return;
+          }
 
           if (!staticText) {
             staticText = document.createElement("span");
@@ -4060,12 +5309,20 @@
           }
 
           return `
+              grid-shelf-view-model:has(ytm-shorts-lockup-view-model-v2),
               ytd-rich-section-renderer:has(ytd-rich-shelf-renderer[is-shorts]),
               ytd-rich-section-renderer:has(ytd-reel-shelf-renderer),
               ytd-rich-section-renderer:has(a[href^="/shorts/"]),
               ytd-rich-item-renderer:has(a[href^="/shorts/"]),
+              ytd-rich-item-renderer:has(${SHORTS_CONVERTED_LINK_SELECTOR}),
               ytd-video-renderer:has(a[href^="/shorts/"]),
+              ytd-video-renderer:has(${SHORTS_CONVERTED_LINK_SELECTOR}),
               ytd-grid-video-renderer:has(a[href^="/shorts/"]),
+              ytd-grid-video-renderer:has(${SHORTS_CONVERTED_LINK_SELECTOR}),
+              yt-lockup-view-model:has(${SHORTS_CONVERTED_LINK_SELECTOR}),
+              yt-lockup-view-model-wiz:has(${SHORTS_CONVERTED_LINK_SELECTOR}),
+              ytm-shorts-lockup-view-model:has(${SHORTS_CONVERTED_LINK_SELECTOR}),
+              ytm-shorts-lockup-view-model-v2:has(${SHORTS_CONVERTED_LINK_SELECTOR}),
               ytd-reel-shelf-renderer,
               ytd-reel-item-renderer,
               ytd-shorts,
@@ -4077,16 +5334,27 @@
         }
 
         function buildFeedCleanupCss() {
-          if (!CONFIG.hideBrandVideoShelf) {
-            return "";
-          }
+          const rules = [
+            `
+              ${CARD_HIDE_ATTRIBUTE_SELECTORS.map(
+                (selector) =>
+                  `:root:not([${FILTER_REVEAL_ATTRIBUTE}="1"]) ${selector}`,
+              ).join(",\n        ")} {
+                display: none !important;
+              }
+            `,
+          ];
 
-          return `
+          if (CONFIG.hideBrandVideoShelf) {
+            rules.push(`
               ytd-rich-section-renderer:has(ytd-brand-video-shelf-renderer),
               ytd-brand-video-shelf-renderer {
                 display: none !important;
               }
-            `;
+            `);
+          }
+
+          return rules.join("\n");
         }
 
         function buildWatchCleanupCss() {
@@ -4285,7 +5553,6 @@
           }
 
           return `
-              ytd-watch-flexy #panels:has(ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-live-chat"]),
               ytd-watch-flexy ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-live-chat"],
               ytd-watch-flexy ytd-engagement-panel-section-list-renderer:has(ytd-live-chat-frame),
               ytd-watch-flexy ytd-engagement-panel-section-list-renderer:has(yt-live-chat-app),
@@ -4297,16 +5564,8 @@
               ytd-watch-live-chat-renderer,
               ytd-watch-live-chat-replay-renderer,
               ytd-live-chat-viewer-engagement-message-renderer,
-              ytd-watch-flexy ytd-watch-metadata #teaser-carousel.ytd-watch-metadata:has(yt-carousel-item-view-model[aria-label="Live chat replay"]),
-              ytd-watch-flexy ytd-watch-metadata #teaser-carousel.ytd-watch-metadata:has(yt-carousel-item-view-model[aria-label*="Live chat" i]),
-              ytd-watch-flexy yt-video-metadata-carousel-view-model:has(yt-carousel-item-view-model[aria-label="Live chat replay"]),
-              ytd-watch-flexy yt-video-metadata-carousel-view-model:has(yt-carousel-item-view-model[aria-label*="Live chat" i]),
-              ytd-watch-flexy .ytVideoMetadataCarouselViewModelHost:has(yt-carousel-item-view-model[aria-label="Live chat replay"]),
-              ytd-watch-flexy .ytVideoMetadataCarouselViewModelHost:has(yt-carousel-item-view-model[aria-label*="Live chat" i]),
-              ytd-watch-flexy .ytVideoMetadataCarouselViewModelCarouselContainer:has(yt-carousel-item-view-model[aria-label="Live chat replay"]),
-              ytd-watch-flexy .ytVideoMetadataCarouselViewModelCarouselContainer:has(yt-carousel-item-view-model[aria-label*="Live chat" i]),
-              ytd-watch-flexy .ytVideoMetadataCarouselViewModelTitleSection:has(+ .ytVideoMetadataCarouselViewModelCarouselContainer yt-carousel-item-view-model[aria-label="Live chat replay"]),
-              ytd-watch-flexy .ytVideoMetadataCarouselViewModelTitleSection:has(+ .ytVideoMetadataCarouselViewModelCarouselContainer yt-carousel-item-view-model[aria-label*="Live chat" i]) {
+              ytd-watch-flexy yt-carousel-item-view-model[aria-label="Live chat replay"],
+              ytd-watch-flexy yt-carousel-item-view-model[aria-label*="Live chat" i] {
                 display: none !important;
               }
             `;
@@ -4337,15 +5596,12 @@
             return "";
           }
 
+          // Keep end-screen geometry native because YouTube uses it while preparing
+          // the autoplay handoff. Hide only the individual recommendation tiles;
+          // never hide their fullscreen grid container or remove tiles from layout.
           return `
-              .html5-video-player .ytp-endscreen-content,
-              .html5-video-player .ytp-endscreen-previous,
-              .html5-video-player .ytp-endscreen-next,
-              .html5-video-player .ytp-endscreen-paginate,
               .html5-video-player .ytp-videowall-still,
-              .html5-video-player .ytp-modern-videowall-still,
-              .html5-video-player .ytp-fullscreen-grid-stills-container {
-                display: none !important;
+              .html5-video-player .ytp-modern-videowall-still {
                 opacity: 0 !important;
                 pointer-events: none !important;
               }
@@ -4908,6 +6164,7 @@
         function handleNavigateStart() {
           clearLiveChatCollapseAttempts();
           clearPlayerLayoutRefreshAttempts();
+          rightButtonHeldOnPlayer = false;
         }
 
         function handleDescriptionClick(event) {
@@ -5062,6 +6319,15 @@
             return;
           }
 
+          if (
+            mutation.type === "childList" &&
+            mutation.removedNodes &&
+            mutation.removedNodes.length
+          ) {
+            addScopedMutationRoot(roots, mutation.target);
+            return;
+          }
+
           if (mutation.type !== "attributes" && mutation.type !== "characterData") {
             return;
           }
@@ -5094,6 +6360,7 @@
             "aria-label",
             "class",
             "hidden",
+            "href",
             "show-yoodle",
             "style",
             "title",
@@ -5126,6 +6393,7 @@
           },
           true,
         );
+
         suite.addWindowListener(
           "pageshow",
           () => {
@@ -5140,7 +6408,7 @@
 
   suite.registerModule(
     "scrollMiniplayer",
-    "Scroll Miniplayer v5.8",
+    "Scroll Miniplayer v5.16",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -5172,8 +6440,39 @@
         const ACTIVE_CLASS = "ytsmp-scroll-miniplayer-active";
         const EXITING_CLASS = "ytsmp-scroll-miniplayer-exiting";
         const CLOSE_BUTTON_ID = "ytsmp-close-button";
+        const CORNER_CONTROL_ID = "ytsmp-corner-control";
+        const CORNER_BUTTON_ID = "ytsmp-corner-button";
+        const CORNER_MENU_ID = "ytsmp-corner-menu";
+        const CORNER_OPTION_CLASS = "ytsmp-corner-option";
+        const CORNER_STORAGE_KEY = "yt-master-suite.scroll-miniplayer.corner.v1";
+        const VALID_CORNERS = Object.freeze([
+          "top-right",
+          "bottom-right",
+          "bottom-left",
+          "top-left",
+        ]);
+        const CORNER_LABELS = Object.freeze({
+          "top-right": "top right",
+          "bottom-right": "bottom right",
+          "bottom-left": "bottom left",
+          "top-left": "top left",
+        });
+        const CORNER_ICON_ROTATIONS = Object.freeze({
+          "top-right": 0,
+          "bottom-right": 90,
+          "bottom-left": 180,
+          "top-left": 270,
+        });
+        const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+        const CLOSE_ICON_PATH =
+          "M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z";
+        const MOVE_ICON_PATH =
+          "M10 9h4V6h3l-5-5-5 5h3v3z M9 10H6V7l-5 5 5 5v-3h3v-4z M15 10h3V7l5 5-5 5v-3h-3v-4z M14 15h-4v3H7l5 5 5-5h-3v-3z";
+        const CORNER_ICON_PATH =
+          "M9 5v2h6.59L5 17.59 6.41 19 17 8.41V15h2V5z";
         const QUEUE_INFO_ID = "ytsmp-compact-queue-info";
         const PLACEHOLDER_ID = "ytsmp-player-placeholder";
+        const PLAYER_RECOVERY_HOST_ID = "ytsmp-player-recovery-host";
         const WATCH_PATHS = ["/watch", "/live/"];
         const WATCH_ROOT_SELECTOR = "ytd-watch-flexy";
         const TRIGGER_ANCHOR_SELECTOR = "#single-column-container";
@@ -5222,18 +6521,71 @@
           "--ytsmp-left",
           "--ytsmp-right",
         ];
+        const QUEUE_VISIBILITY_STATE_ATTRIBUTES = [
+          "aria-hidden",
+          "class",
+          "hidden",
+          "style",
+        ];
+        const QUEUE_PANEL_STATE_ATTRIBUTES = [
+          "aria-current",
+          "aria-selected",
+          "selected",
+          ...QUEUE_VISIBILITY_STATE_ATTRIBUTES,
+        ];
+        const NAVIGATION_RECOVERY_CHECK_DELAYS_MS = [1500, 5000, 10000];
+        const NAVIGATION_RECOVERY_HARD_CAP_MS = 20000;
+        const PLAYER_RESTORE_RETRY_DELAYS_MS = [50, 250, 1000, 3000, 8000, 15000];
+        const PLAYER_ORPHAN_FINALISE_GRACE_MS = 20000;
 
         let scrollScheduled = false;
         let routeScheduled = false;
         let queueInfoScheduled = false;
         let fadeOutTimer = 0;
+        let navigationStartUrl = "";
+        let navigationStartPlayerVideoId = "";
         let suppressedUntilVisible = false;
         let navigationInProgress = false;
         let mutationObserverActive = false;
+        let playerAdoptionObserverActive = false;
+        let playerAdoptionObserverTarget = null;
+        let playerOrphanFinaliseTimer = 0;
+        const navigationRecoveryTimers = new Set();
+        const queuePanelObservers = new Map();
+        const playerRestoreRetryTimers = new Set();
         let floatedPlayer = null;
         let playerPlaceholder = null;
         let restoreParent = null;
         let restoreNextSibling = null;
+        let currentCorner = readStoredCorner();
+
+        function isValidCorner(value) {
+          return VALID_CORNERS.includes(value);
+        }
+
+        function readStoredCorner() {
+          const defaultCorner = isValidCorner(CONFIG.position)
+            ? CONFIG.position
+            : "top-right";
+
+          try {
+            const storedCorner = localStorage.getItem(CORNER_STORAGE_KEY);
+            return isValidCorner(storedCorner) ? storedCorner : defaultCorner;
+          } catch {
+            return defaultCorner;
+          }
+        }
+
+        function persistCorner(corner) {
+          if (!isValidCorner(corner)) return false;
+
+          try {
+            localStorage.setItem(CORNER_STORAGE_KEY, corner);
+            return true;
+          } catch {
+            return false;
+          }
+        }
 
         function isEligiblePath() {
           return location.pathname === WATCH_PATHS[0] || location.pathname.startsWith(WATCH_PATHS[1]);
@@ -5325,14 +6677,35 @@
           };
         }
 
-        function getPlayer() {
+        function getWatchHostPlayer(excludedPlayer = null) {
           const watchRoot = getWatchRoot();
+          if (!watchRoot?.isConnected) return null;
+
+          const candidates = [
+            ...watchRoot.querySelectorAll(MOVIE_PLAYER_SELECTOR),
+            ...watchRoot.querySelectorAll(HTML5_PLAYER_SELECTOR),
+          ].filter(
+            (player) => player.isConnected && player !== excludedPlayer,
+          );
+          const uniqueCandidates = Array.from(new Set(candidates));
+          const urlVideoId = getVideoIdFromUrl(location.href);
+          if (urlVideoId) {
+            const exactCandidate = uniqueCandidates.find(
+              (player) => getPlayerVideoIdFromPlayer(player) === urlVideoId,
+            );
+            if (exactCandidate) return exactCandidate;
+          }
+
+          return uniqueCandidates[0] || null;
+        }
+
+        function getPlayer() {
+          const hostedPlayer = getWatchHostPlayer();
 
           return (
+            hostedPlayer ||
             (floatedPlayer && document.documentElement.contains(floatedPlayer) ? floatedPlayer : null) ||
-            (watchRoot && watchRoot.querySelector(MOVIE_PLAYER_SELECTOR)) ||
             document.getElementById(MOVIE_PLAYER_ID) ||
-            (watchRoot && watchRoot.querySelector(HTML5_PLAYER_SELECTOR)) ||
             document.querySelector(HTML5_PLAYER_SELECTOR)
           );
         }
@@ -5340,6 +6713,81 @@
         function getPlayerVideo() {
           const player = getPlayer();
           return player ? player.querySelector(VIDEO_SELECTOR) : null;
+        }
+
+        function getPlayerVideoIdFromPlayer(player) {
+          try {
+            return normaliseText(player?.getVideoData?.()?.video_id);
+          } catch {
+            return "";
+          }
+        }
+
+        function getPlayerVideoId() {
+          return getPlayerVideoIdFromPlayer(getPlayer());
+        }
+
+        function clearNavigationRecoveryTimers() {
+          navigationRecoveryTimers.forEach((timerId) => clearTimeout(timerId));
+          navigationRecoveryTimers.clear();
+        }
+
+        function navigationHasSettledOrCancelled(allowUnchangedIdentity = false) {
+          if (!isEligiblePath()) return true;
+
+          const urlVideoId = getVideoIdFromUrl(location.href);
+          const playerVideoId = getPlayerVideoId();
+          if (urlVideoId && playerVideoId) {
+            return urlVideoId === playerVideoId;
+          }
+
+          return allowUnchangedIdentity && (
+            location.href === navigationStartUrl &&
+            playerVideoId === navigationStartPlayerVideoId
+          );
+        }
+
+        function finishNavigationLock() {
+          clearNavigationRecoveryTimers();
+          navigationStartUrl = "";
+          navigationStartPlayerVideoId = "";
+          navigationInProgress = false;
+          suppressedUntilVisible = false;
+          scheduleRouteSync();
+        }
+
+        function scheduleNavigationRecoveryCheck(
+          delay,
+          { allowUnchangedIdentity = false, hardCap = false } = {},
+        ) {
+          const timerId = setTimeout(() => {
+            navigationRecoveryTimers.delete(timerId);
+            if (!navigationInProgress) return;
+
+            if (
+              hardCap ||
+              navigationHasSettledOrCancelled(allowUnchangedIdentity)
+            ) {
+              finishNavigationLock();
+            }
+          }, delay);
+          navigationRecoveryTimers.add(timerId);
+        }
+
+        function beginNavigationLock() {
+          clearNavigationRecoveryTimers();
+          clearPlayerOrphanFinaliseTimer();
+          navigationStartUrl = location.href;
+          navigationStartPlayerVideoId = getPlayerVideoId();
+          navigationInProgress = true;
+          NAVIGATION_RECOVERY_CHECK_DELAYS_MS.forEach((delay, index, delays) => {
+            scheduleNavigationRecoveryCheck(delay, {
+              allowUnchangedIdentity: index === delays.length - 1,
+            });
+          });
+          scheduleNavigationRecoveryCheck(NAVIGATION_RECOVERY_HARD_CAP_MS, {
+            hardCap: true,
+          });
         }
 
         function getMastheadHeight() {
@@ -5463,35 +6911,111 @@
               pointer-events: none !important;
             }
 
-            #${CLOSE_BUTTON_ID} {
+            #${CLOSE_BUTTON_ID},
+            #${CORNER_CONTROL_ID} {
               display: none !important;
             }
 
-            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CLOSE_BUTTON_ID} {
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CLOSE_BUTTON_ID},
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CORNER_BUTTON_ID},
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) .${CORNER_OPTION_CLASS} {
+              appearance: none !important;
               align-items: center !important;
               background: rgba(0, 0, 0, 0.72) !important;
               border: 0 !important;
               border-radius: 999px !important;
               box-sizing: border-box !important;
+              box-shadow: 0 1px 2px rgba(0, 0, 0, 0.65) !important;
               color: #fff !important;
               cursor: pointer !important;
               display: flex !important;
-              font: 700 18px/1 Arial, Helvetica, sans-serif !important;
+              flex: 0 0 28px !important;
               height: 28px !important;
               justify-content: center !important;
-              opacity: 0 !important;
               padding: 0 !important;
-              position: absolute !important;
-              right: 8px !important;
-              top: 8px !important;
-              transition: opacity 120ms ease-out !important;
+              position: relative !important;
+              transition: background-color 100ms ease-out, transform 80ms ease-out !important;
               width: 28px !important;
               z-index: 2147483647 !important;
             }
 
-            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen):hover #${CLOSE_BUTTON_ID},
-            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CLOSE_BUTTON_ID}:focus-visible {
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CLOSE_BUTTON_ID} svg,
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CORNER_BUTTON_ID} svg,
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) .${CORNER_OPTION_CLASS} svg {
+              display: block !important;
+              fill: currentColor !important;
+              height: 18px !important;
+              pointer-events: none !important;
+              width: 18px !important;
+            }
+
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CLOSE_BUTTON_ID} {
+              opacity: 0 !important;
+              position: absolute !important;
+              right: 8px !important;
+              top: 8px !important;
+              transition: background-color 100ms ease-out, opacity 120ms ease-out, transform 80ms ease-out !important;
+            }
+
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CORNER_CONTROL_ID} {
+              align-items: center !important;
+              display: flex !important;
+              flex-direction: row-reverse !important;
+              gap: 4px !important;
+              opacity: 0 !important;
+              position: absolute !important;
+              right: 44px !important;
+              top: 8px !important;
+              transition: opacity 120ms ease-out !important;
+              z-index: 2147483647 !important;
+            }
+
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CORNER_MENU_ID} {
+              align-items: center !important;
+              display: flex !important;
+              gap: 4px !important;
+              max-width: 0 !important;
+              opacity: 0 !important;
+              overflow: hidden !important;
+              pointer-events: none !important;
+              transform: translateX(4px) !important;
+              transition: max-width 120ms ease-out, opacity 100ms ease-out, transform 120ms ease-out, visibility 0s linear 120ms !important;
+              visibility: hidden !important;
+            }
+
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CORNER_CONTROL_ID}[data-open="1"] #${CORNER_MENU_ID} {
+              max-width: 92px !important;
               opacity: 1 !important;
+              pointer-events: auto !important;
+              transform: translateX(0) !important;
+              transition-delay: 0s !important;
+              visibility: visible !important;
+            }
+
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen):hover #${CLOSE_BUTTON_ID},
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen):hover #${CORNER_CONTROL_ID},
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CLOSE_BUTTON_ID}:focus-visible,
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CORNER_CONTROL_ID}:focus-within {
+              opacity: 1 !important;
+            }
+
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CLOSE_BUTTON_ID}:hover,
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CORNER_BUTTON_ID}:hover,
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) .${CORNER_OPTION_CLASS}:hover {
+              background: rgba(0, 0, 0, 0.9) !important;
+            }
+
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CLOSE_BUTTON_ID}:active,
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CORNER_BUTTON_ID}:active,
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) .${CORNER_OPTION_CLASS}:active {
+              transform: scale(0.92) !important;
+            }
+
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CLOSE_BUTTON_ID}:focus-visible,
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) #${CORNER_BUTTON_ID}:focus-visible,
+            body.${ACTIVE_CLASS} ${MOVIE_PLAYER_SELECTOR}:not(.ytp-fullscreen) .${CORNER_OPTION_CLASS}:focus-visible {
+              outline: 2px solid #fff !important;
+              outline-offset: 2px !important;
             }
 
             #${QUEUE_INFO_ID} {
@@ -5542,7 +7066,9 @@
           const body = document.body;
           if (!body) return;
 
-          const remainingColumnBox = CONFIG.position === "top-right" ? getRemainingColumnBox() : null;
+          const remainingColumnBox = currentCorner.endsWith("right")
+            ? getRemainingColumnBox()
+            : null;
           const availableWidth = Math.max(160, innerWidth - CONFIG.edgeOffsetPx * 2);
           const availableHeight = Math.max(90, innerHeight - getMastheadHeight() - CONFIG.mastheadGapPx - CONFIG.edgeOffsetPx);
           const isPortraitViewport = innerHeight > innerWidth;
@@ -5572,8 +7098,8 @@
           const top = getMastheadHeight() + CONFIG.mastheadGapPx;
           const bottom = CONFIG.edgeOffsetPx;
           const edge = CONFIG.edgeOffsetPx;
-          const vertical = CONFIG.position.startsWith("bottom") ? "bottom" : "top";
-          const horizontal = CONFIG.position.endsWith("right") ? "right" : "left";
+          const vertical = currentCorner.startsWith("bottom") ? "bottom" : "top";
+          const horizontal = currentCorner.endsWith("right") ? "right" : "left";
           const right = remainingColumnBox ? remainingColumnBox.right : edge;
 
           body.style.setProperty("--ytsmp-width", `${width}px`);
@@ -5620,8 +7146,50 @@
           }
         }
 
+        function getPlayerRecoveryHost() {
+          return document.getElementById(PLAYER_RECOVERY_HOST_ID);
+        }
+
+        function ensurePlayerRecoveryHost() {
+          if (!document.body) return null;
+
+          let host = getPlayerRecoveryHost();
+          if (!host) {
+            host = document.createElement("div");
+            host.id = PLAYER_RECOVERY_HOST_ID;
+            host.setAttribute("aria-hidden", "true");
+            host.style.setProperty("contain", "strict", "important");
+            host.style.setProperty("height", "1px", "important");
+            host.style.setProperty("left", "-10000px", "important");
+            host.style.setProperty("opacity", "0", "important");
+            host.style.setProperty("overflow", "hidden", "important");
+            host.style.setProperty("pointer-events", "none", "important");
+            host.style.setProperty("position", "fixed", "important");
+            host.style.setProperty("top", "0", "important");
+            host.style.setProperty("width", "1px", "important");
+          }
+          if (!host.isConnected) document.body.appendChild(host);
+          return host;
+        }
+
+        function removePlayerRecoveryHostIfEmpty() {
+          const host = getPlayerRecoveryHost();
+          if (host && !host.hasChildNodes()) host.remove();
+        }
+
         function movePlayerToTopLevel(player) {
-          if (!player || !document.body || player.parentElement === document.body) return;
+          clearPlayerRestoreRetries();
+          clearPlayerOrphanFinaliseTimer();
+          if (!player || !document.body) return false;
+
+          if (
+            floatedPlayer &&
+            player !== floatedPlayer &&
+            !reconcileTrackedPlayer()
+          ) {
+            return false;
+          }
+          if (player.parentElement === document.body) return player === floatedPlayer;
 
           if (!floatedPlayer) {
             floatedPlayer = player;
@@ -5631,31 +7199,302 @@
           }
 
           document.body.appendChild(player);
+          removePlayerRecoveryHostIfEmpty();
+          return player.parentElement === document.body;
         }
 
-        function restorePlayer() {
-          if (!floatedPlayer) {
-            removePlayerPlaceholder();
-            return;
+        function clearPlayerRestoreRetries() {
+          playerRestoreRetryTimers.forEach((timerId) => clearTimeout(timerId));
+          playerRestoreRetryTimers.clear();
+        }
+
+        function clearPlayerOrphanFinaliseTimer() {
+          if (playerOrphanFinaliseTimer) {
+            clearTimeout(playerOrphanFinaliseTimer);
+            playerOrphanFinaliseTimer = 0;
+          }
+          stopPlayerAdoptionObservation();
+        }
+
+        function isPlayerAdoptedByConnectedHost(player) {
+          if (!player?.isConnected || player.parentElement === document.body) {
+            return false;
+          }
+          if (player.closest(`#${PLAYER_RECOVERY_HOST_ID}`)) return false;
+
+          const nativeMiniplayer = player.closest(NATIVE_MINIPLAYER_SELECTOR);
+          return Boolean(nativeMiniplayer?.isConnected || player.parentElement?.isConnected);
+        }
+
+        function finishPlayerRestore() {
+          clearPlayerRestoreRetries();
+          clearPlayerOrphanFinaliseTimer();
+          removePlayerPlaceholder();
+          removePlayerRecoveryHostIfEmpty();
+          floatedPlayer = null;
+          restoreParent = null;
+          restoreNextSibling = null;
+        }
+
+        function getAuthoritativeReplacementPlayer() {
+          if (!floatedPlayer) return null;
+
+          const replacement = getWatchHostPlayer(floatedPlayer);
+          const replacementVideo = replacement?.querySelector(VIDEO_SELECTOR);
+          if (!replacement || !replacementVideo?.isConnected) return null;
+
+          const urlVideoId = getVideoIdFromUrl(location.href);
+          if (!urlVideoId) return null;
+
+          const replacementVideoId = getPlayerVideoIdFromPlayer(replacement);
+          if (replacementVideoId !== urlVideoId) return null;
+
+          const oldPlayerIsDisposable =
+            !floatedPlayer.isConnected ||
+            floatedPlayer.parentElement === document.body ||
+            Boolean(floatedPlayer.closest(`#${PLAYER_RECOVERY_HOST_ID}`));
+          return oldPlayerIsDisposable ? replacement : null;
+        }
+
+        function recoverReplacedFloatedPlayer() {
+          const obsoletePlayer = floatedPlayer;
+          const replacement = getAuthoritativeReplacementPlayer();
+          if (!obsoletePlayer || !replacement) return false;
+
+          const resumeFloating = isBodyFloating() && !navigationInProgress;
+          finishPlayerRestore();
+          obsoletePlayer.remove();
+          removePlayerRecoveryHostIfEmpty();
+
+          if (!resumeFloating) return true;
+
+          if (canFloatPlayer() && movePlayerToTopLevel(replacement)) {
+            ensureCloseButton();
+            ensureCornerButton();
+            setBodyBoxVars();
+            scheduleCompactQueueInfoSync();
+            return true;
+          }
+
+          document.body?.classList.remove(ACTIVE_CLASS, EXITING_CLASS);
+          clearBodyBoxVars();
+          removeCloseButton();
+          removeCornerButton();
+          removeCompactQueueInfo();
+          dispatchResize();
+          scheduleScrollSync();
+          return true;
+        }
+
+        function reconcileTrackedPlayer() {
+          if (!floatedPlayer) return false;
+
+          if (isPlayerAdoptedByConnectedHost(floatedPlayer)) {
+            finishPlayerRestore();
+            return true;
+          }
+
+          return recoverReplacedFloatedPlayer();
+        }
+
+        function getSafeRestoreParent(player) {
+          const candidates = [];
+          if (restoreParent) candidates.push(restoreParent);
+          if (playerPlaceholder?.parentElement) {
+            candidates.push(playerPlaceholder.parentElement);
           }
 
           const watchRoot = getWatchRoot();
-          const fallbackParent = watchRoot && watchRoot.querySelector(PLAYER_HOST_SELECTOR);
-          const parent = restoreParent && document.documentElement.contains(restoreParent)
-            ? restoreParent
-            : fallbackParent;
+          const fallbackPlayerHost = watchRoot?.querySelector(PLAYER_HOST_SELECTOR);
+          const fallbackContainer = fallbackPlayerHost?.querySelector(":scope > #container");
+          if (fallbackContainer) candidates.push(fallbackContainer);
+          if (fallbackPlayerHost) candidates.push(fallbackPlayerHost);
 
-          if (parent) {
+          return candidates.find((candidate, index) => {
+            if (
+              !candidate?.isConnected ||
+              candidate === document.body ||
+              candidate === player ||
+              player?.contains(candidate) ||
+              candidates.indexOf(candidate) !== index
+            ) {
+              return false;
+            }
+
+            const existingPlayer = candidate.querySelector?.(
+              `${MOVIE_PLAYER_SELECTOR}, ${HTML5_PLAYER_SELECTOR}`,
+            );
+            return !existingPlayer || existingPlayer === player;
+          }) || null;
+        }
+
+        function canDiscardOffRouteOrphan(player) {
+          const video = player?.querySelector(VIDEO_SELECTOR);
+          if (!video) return true;
+          if (video.ended || video.error) return true;
+
+          const currentSource = normaliseText(video.currentSrc || video.src);
+          return !currentSource;
+        }
+
+        const playerAdoptionObserver = new MutationObserver(() => {
+          if (!floatedPlayer) {
+            stopPlayerAdoptionObservation();
+            return;
+          }
+
+          if (reconcileTrackedPlayer()) {
+            stopPlayerAdoptionObservation();
+            scheduleRouteSync();
+            return;
+          }
+          startPlayerAdoptionObservation();
+        });
+
+        function startPlayerAdoptionObservation() {
+          const target = floatedPlayer?.parentElement;
+          if (!target) return;
+          if (
+            playerAdoptionObserverActive &&
+            playerAdoptionObserverTarget === target
+          ) {
+            return;
+          }
+
+          playerAdoptionObserver.disconnect();
+
+          playerAdoptionObserver.observe(target, {
+            childList: true,
+          });
+          playerAdoptionObserverActive = true;
+          playerAdoptionObserverTarget = target;
+        }
+
+        function stopPlayerAdoptionObservation() {
+          if (!playerAdoptionObserverActive) return;
+
+          playerAdoptionObserver.disconnect();
+          playerAdoptionObserverActive = false;
+          playerAdoptionObserverTarget = null;
+        }
+
+        function scheduleOffRouteOrphanFinalisation() {
+          if (
+            playerOrphanFinaliseTimer ||
+            !floatedPlayer ||
+            navigationInProgress ||
+            isEligiblePath() ||
+            isBodyFloating()
+          ) {
+            return;
+          }
+
+          const candidate = floatedPlayer;
+          startPlayerAdoptionObservation();
+          playerOrphanFinaliseTimer = setTimeout(() => {
+            playerOrphanFinaliseTimer = 0;
+            if (
+              floatedPlayer !== candidate ||
+              navigationInProgress ||
+              isEligiblePath() ||
+              isBodyFloating()
+            ) {
+              return;
+            }
+
+            if (isPlayerAdoptedByConnectedHost(candidate)) {
+              finishPlayerRestore();
+              return;
+            }
+
+            if (restorePlayer(false)) return;
+            if (
+              floatedPlayer === candidate &&
+              canDiscardOffRouteOrphan(candidate)
+            ) {
+              candidate.remove();
+              finishPlayerRestore();
+              return;
+            }
+
+            const recoveryHost = ensurePlayerRecoveryHost();
+            if (recoveryHost && candidate.parentElement !== recoveryHost) {
+              recoveryHost.appendChild(candidate);
+            }
+            startPlayerAdoptionObservation();
+            scheduleOffRouteOrphanFinalisation();
+          }, PLAYER_ORPHAN_FINALISE_GRACE_MS);
+        }
+
+        function schedulePlayerRestoreRetries() {
+          if (!floatedPlayer || playerRestoreRetryTimers.size) return;
+
+          PLAYER_RESTORE_RETRY_DELAYS_MS.forEach((delay) => {
+            const timerId = setTimeout(() => {
+              playerRestoreRetryTimers.delete(timerId);
+              if (!floatedPlayer || isBodyFloating()) return;
+              if (reconcileTrackedPlayer()) return;
+              restorePlayer(false);
+            }, delay);
+            playerRestoreRetryTimers.add(timerId);
+          });
+        }
+
+        function restorePlayer(scheduleRetries = true) {
+          if (reconcileTrackedPlayer()) return true;
+
+          if (!floatedPlayer) {
+            clearPlayerRestoreRetries();
+            clearPlayerOrphanFinaliseTimer();
+            removePlayerPlaceholder();
+            return true;
+          }
+
+          const parent = getSafeRestoreParent(floatedPlayer);
+          if (!parent) {
+            if (scheduleRetries) schedulePlayerRestoreRetries();
+            return false;
+          }
+
+          try {
             const nextSibling = restoreNextSibling && restoreNextSibling.parentNode === parent
               ? restoreNextSibling
               : null;
             parent.insertBefore(floatedPlayer, nextSibling);
+          } catch {
+            if (scheduleRetries) schedulePlayerRestoreRetries();
+            return false;
           }
 
-          removePlayerPlaceholder();
-          floatedPlayer = null;
-          restoreParent = null;
-          restoreNextSibling = null;
+          if (floatedPlayer.parentElement !== parent) {
+            if (scheduleRetries) schedulePlayerRestoreRetries();
+            return false;
+          }
+
+          finishPlayerRestore();
+          return true;
+        }
+
+        function createControlIcon(className, pathData) {
+          const icon = document.createElementNS(SVG_NAMESPACE, "svg");
+          icon.classList.add(className);
+          icon.setAttribute("aria-hidden", "true");
+          icon.setAttribute("focusable", "false");
+          icon.setAttribute("viewBox", "0 0 24 24");
+
+          const path = document.createElementNS(SVG_NAMESPACE, "path");
+          path.setAttribute("d", pathData);
+          icon.appendChild(path);
+          return icon;
+        }
+
+        function ensureControlIcon(button, className, pathData) {
+          let icon = button.querySelector(`svg.${className}`);
+          if (icon) return icon;
+
+          icon = createControlIcon(className, pathData);
+          button.replaceChildren(icon);
+          return icon;
         }
 
         function ensureCloseButton() {
@@ -5667,8 +7506,6 @@
             button = document.createElement("button");
             button.id = CLOSE_BUTTON_ID;
             button.type = "button";
-            button.setAttribute("aria-label", "Close scroll miniplayer");
-            button.textContent = "x";
             button.addEventListener("click", (event) => {
               event.preventDefault();
               event.stopPropagation();
@@ -5676,6 +7513,10 @@
               setActive(false);
             }, true);
           }
+
+          button.setAttribute("aria-label", "Close scroll miniplayer");
+          button.title = "Close miniplayer";
+          ensureControlIcon(button, "ytsmp-close-icon", CLOSE_ICON_PATH);
 
           if (button.parentElement !== player) {
             player.appendChild(button);
@@ -5685,6 +7526,148 @@
         function removeCloseButton() {
           const button = document.getElementById(CLOSE_BUTTON_ID);
           if (button) button.remove();
+        }
+
+        function setCornerMenuOpen(control, isOpen) {
+          if (!control) return;
+
+          if (isOpen) {
+            control.dataset.open = "1";
+          } else {
+            delete control.dataset.open;
+          }
+
+          const button = control.querySelector(`#${CORNER_BUTTON_ID}`);
+          if (button) button.setAttribute("aria-expanded", String(isOpen));
+        }
+
+        function updateCornerButton(button = document.getElementById(CORNER_BUTTON_ID)) {
+          if (!button) return;
+
+          const label = `Move miniplayer. Current position: ${CORNER_LABELS[currentCorner]}`;
+          ensureControlIcon(
+            button,
+            "ytsmp-move-icon",
+            MOVE_ICON_PATH,
+          );
+          button.setAttribute("aria-label", label);
+          button.title = label;
+        }
+
+        function renderCornerOptions(control) {
+          const menu = control?.querySelector(`#${CORNER_MENU_ID}`);
+          if (!menu || menu.dataset.currentCorner === currentCorner) return;
+
+          const options = VALID_CORNERS
+            .filter((corner) => corner !== currentCorner)
+            .map((corner) => {
+              const option = document.createElement("button");
+              const label = `Move miniplayer to ${CORNER_LABELS[corner]}`;
+              option.className = CORNER_OPTION_CLASS;
+              option.type = "button";
+              option.dataset.corner = corner;
+              option.setAttribute("aria-label", label);
+              option.title = label;
+
+              const icon = createControlIcon(
+                "ytsmp-corner-icon",
+                CORNER_ICON_PATH,
+              );
+              icon.style.transform = `rotate(${CORNER_ICON_ROTATIONS[corner]}deg)`;
+              option.appendChild(icon);
+              option.addEventListener("click", (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                applyCornerSelection(corner, control);
+              }, true);
+              return option;
+            });
+
+          menu.replaceChildren(...options);
+          menu.dataset.currentCorner = currentCorner;
+        }
+
+        function applyCornerSelection(corner, control) {
+          if (!isValidCorner(corner) || corner === currentCorner) return;
+
+          currentCorner = corner;
+          persistCorner(currentCorner);
+          updateCornerButton();
+          renderCornerOptions(control);
+          control?.querySelector(`#${CORNER_BUTTON_ID}`)?.focus({ preventScroll: true });
+          setCornerMenuOpen(control, false);
+          setBodyBoxVars();
+          dispatchResize();
+        }
+
+        function ensureCornerButton() {
+          const player = getPlayer();
+          if (!player) return;
+
+          let control = document.getElementById(CORNER_CONTROL_ID);
+          if (!control) {
+            control = document.createElement("div");
+            control.id = CORNER_CONTROL_ID;
+            control.addEventListener("pointerenter", () => {
+              setCornerMenuOpen(control, true);
+            });
+            control.addEventListener("pointerleave", () => {
+              if (!control.contains(document.activeElement)) {
+                setCornerMenuOpen(control, false);
+              }
+            });
+            control.addEventListener("focusin", () => {
+              setCornerMenuOpen(control, true);
+            });
+            control.addEventListener("focusout", (event) => {
+              if (!control.contains(event.relatedTarget)) {
+                setCornerMenuOpen(control, false);
+              }
+            });
+            control.addEventListener("keydown", (event) => {
+              if (event.key !== "Escape") return;
+              event.preventDefault();
+              event.stopPropagation();
+              control.querySelector(`#${CORNER_BUTTON_ID}`)?.focus({ preventScroll: true });
+              setCornerMenuOpen(control, false);
+            });
+          }
+
+          let button = control.querySelector(`#${CORNER_BUTTON_ID}`);
+          if (!button) {
+            button = document.createElement("button");
+            button.id = CORNER_BUTTON_ID;
+            button.type = "button";
+            button.setAttribute("aria-controls", CORNER_MENU_ID);
+            button.setAttribute("aria-expanded", "false");
+            button.addEventListener("click", (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setCornerMenuOpen(control, true);
+            }, true);
+            control.appendChild(button);
+          }
+
+          let menu = control.querySelector(`#${CORNER_MENU_ID}`);
+          if (!menu) {
+            menu = document.createElement("div");
+            menu.id = CORNER_MENU_ID;
+            menu.setAttribute("role", "group");
+            menu.setAttribute("aria-label", "Choose miniplayer position");
+            control.appendChild(menu);
+          }
+
+          updateCornerButton(button);
+          renderCornerOptions(control);
+          if (control.parentElement !== player) {
+            player.appendChild(control);
+          }
+        }
+
+        function removeCornerButton() {
+          document.getElementById(CORNER_CONTROL_ID)?.remove();
+          document.getElementById(CORNER_BUTTON_ID)?.remove();
+          document.getElementById(CORNER_MENU_ID)?.remove();
         }
 
         function normaliseText(value) {
@@ -5711,16 +7694,40 @@
           return link ? getVideoIdFromUrl(link.href || link.getAttribute("href")) : "";
         }
 
-        function getCompactQueueState() {
-          if (!CONFIG.showCompactQueueInfo) return null;
+        function isQueuePanelVisible(panel) {
+          if (
+            !panel?.isConnected ||
+            panel.hidden ||
+            panel.hasAttribute("hidden") ||
+            panel.getAttribute("aria-hidden") === "true"
+          ) {
+            return false;
+          }
 
-          const panel = document.querySelector(QUEUE_PANEL_SELECTOR);
-          if (!panel) return null;
+          const style = getComputedStyle(panel);
+          if (
+            style.display === "none" ||
+            style.visibility === "hidden" ||
+            style.opacity === "0"
+          ) {
+            return false;
+          }
 
-          const items = Array.from(panel.querySelectorAll(QUEUE_ITEM_SELECTOR));
-          if (!items.length) return null;
+          const rect = panel.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        }
 
-          const player = getPlayer();
+        function getSelectedQueueItem(items) {
+          return items.find((item) =>
+            item.hasAttribute("selected") ||
+            item.getAttribute("aria-current") === "true" ||
+            item.getAttribute("aria-selected") === "true" ||
+            item.classList.contains("selected") ||
+            Boolean(item.querySelector('[aria-current="true"], [aria-selected="true"]'))
+          ) || null;
+        }
+
+        function getCurrentVideoIds(player) {
           let playerVideoId = "";
           try {
             playerVideoId = normaliseText(player?.getVideoData?.()?.video_id);
@@ -5728,27 +7735,94 @@
             // YouTube can replace the player API while navigating.
           }
 
-          const currentVideoIds = [
+          return [
             getVideoIdFromUrl(location.href),
             playerVideoId,
           ].filter((videoId, index, videoIds) =>
             Boolean(videoId) && videoIds.indexOf(videoId) === index
           );
-          let currentItem = null;
-          for (const currentVideoId of currentVideoIds) {
-            currentItem = items.find(
-              (item) => getQueueItemVideoId(item) === currentVideoId,
-            );
-            if (currentItem) break;
+        }
+
+        function getCurrentQueuePanel(currentVideoIds) {
+          const entries = Array.from(document.querySelectorAll(QUEUE_PANEL_SELECTOR))
+            .map((panel) => {
+              const items = Array.from(panel.querySelectorAll(QUEUE_ITEM_SELECTOR));
+              const selectedItem = getSelectedQueueItem(items);
+              let matchedItem = null;
+              let matchedVideoPriority = -1;
+
+              currentVideoIds.some((videoId, priority) => {
+                matchedItem = items.find(
+                  (item) => getQueueItemVideoId(item) === videoId,
+                ) || null;
+                if (!matchedItem) return false;
+                matchedVideoPriority = priority;
+                return true;
+              });
+
+              return {
+                items,
+                matchedItem,
+                matchedVideoPriority,
+                panel,
+                selectedItem,
+                visible: isQueuePanelVisible(panel),
+              };
+            })
+            .filter(({ items }) => items.length);
+
+          const compareEntries = (left, right) => {
+            const score = (entry) =>
+              (entry.matchedItem ? 1000 - entry.matchedVideoPriority * 10 : 0) +
+              (entry.selectedItem ? 10 : 0);
+            return score(right) - score(left);
+          };
+          const visibleEntries = entries.filter(({ visible }) => visible);
+          const visibleMatchedEntries = visibleEntries.filter(
+            ({ matchedItem }) => matchedItem,
+          );
+          if (visibleMatchedEntries.length) {
+            visibleMatchedEntries.sort(compareEntries);
+            return visibleMatchedEntries[0];
           }
+
+          const matchedEntries = entries.filter(({ matchedItem }) => matchedItem);
+          if (matchedEntries.length) {
+            matchedEntries.sort(compareEntries);
+            return matchedEntries[0];
+          }
+
+          const visibleSelectedEntries = visibleEntries.filter(
+            ({ selectedItem }) => selectedItem,
+          );
+          if (visibleSelectedEntries.length === 1) {
+            return visibleSelectedEntries[0];
+          }
+          if (!visibleSelectedEntries.length && visibleEntries.length === 1) {
+            return visibleEntries[0];
+          }
+
+          const hiddenSelectedEntries = entries.filter(
+            ({ selectedItem, visible }) => selectedItem && !visible,
+          );
+          return hiddenSelectedEntries.length === 1
+            ? hiddenSelectedEntries[0]
+            : null;
+        }
+
+        function getCompactQueueState() {
+          if (!CONFIG.showCompactQueueInfo) return null;
+
+          const player = getPlayer();
+          const currentVideoIds = getCurrentVideoIds(player);
+          const entry = getCurrentQueuePanel(currentVideoIds);
+          if (!entry) return null;
+
+          const { items, panel } = entry;
+          let currentItem = entry.matchedItem;
           const matchedCurrentVideoId = Boolean(currentItem);
           if (!currentItem) {
-            currentItem = items.find((item) =>
-              item.hasAttribute("selected") ||
-              item.getAttribute("aria-current") === "true" ||
-              item.classList.contains("selected") ||
-              Boolean(item.querySelector('[aria-current="true"]'))
-            );
+            currentItem = entry.selectedItem;
           }
 
           const indexText = normaliseText(
@@ -5847,15 +7921,19 @@
           const wasActive = body.classList.contains(ACTIVE_CLASS);
           const wasExiting = body.classList.contains(EXITING_CLASS);
 
-          if (active === wasActive && !wasExiting) return;
+          if (active === wasActive && !wasExiting) {
+            if (!active && floatedPlayer) restorePlayer();
+            return;
+          }
 
           if (active) {
             if (!canFloatPlayer()) return;
 
             clearTimeout(fadeOutTimer);
             ensureStyles();
-            movePlayerToTopLevel(getPlayer());
+            if (!movePlayerToTopLevel(getPlayer())) return;
             ensureCloseButton();
+            ensureCornerButton();
             setBodyBoxVars();
             body.classList.remove(EXITING_CLASS);
             body.classList.add(ACTIVE_CLASS);
@@ -5875,6 +7953,7 @@
               body.classList.remove(EXITING_CLASS);
               clearBodyBoxVars();
               removeCloseButton();
+              removeCornerButton();
               removeCompactQueueInfo();
               restorePlayer();
               dispatchResize();
@@ -5886,6 +7965,7 @@
               body.classList.remove(EXITING_CLASS);
               clearBodyBoxVars();
               removeCloseButton();
+              removeCornerButton();
               removeCompactQueueInfo();
               restorePlayer();
               dispatchResize();
@@ -5897,6 +7977,7 @@
           body.classList.remove(EXITING_CLASS);
           clearBodyBoxVars();
           removeCloseButton();
+          removeCornerButton();
           removeCompactQueueInfo();
           restorePlayer();
         }
@@ -5910,6 +7991,7 @@
           body.classList.remove(ACTIVE_CLASS, EXITING_CLASS);
           clearBodyBoxVars();
           removeCloseButton();
+          removeCornerButton();
           removeCompactQueueInfo();
           restorePlayer();
 
@@ -5961,6 +8043,7 @@
 
         function syncRouteState() {
           routeScheduled = false;
+          reconcileTrackedPlayer();
 
           if (navigationInProgress) {
             suppressedUntilVisible = false;
@@ -5972,10 +8055,13 @@
             stopMutationObservation();
             suppressedUntilVisible = false;
             setActive(false);
+            scheduleOffRouteOrphanFinalisation();
             return;
           }
 
+          clearPlayerOrphanFinaliseTimer();
           startMutationObservation();
+          syncQueuePanelObservation();
           ensureStyles();
           if (isBodyActive()) {
             scheduleCompactQueueInfoSync();
@@ -5990,28 +8076,142 @@
           requestAnimationFrame(syncRouteState);
         }
 
-        const mutationObserver = new MutationObserver((mutations) => {
-          if (navigationInProgress || !isEligiblePath()) return;
+        function getMutationElement(node) {
+          if (!node) return null;
+          return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+        }
+
+        function nodeContainsQueuePanel(node) {
+          const element = getMutationElement(node);
+          return Boolean(
+            element &&
+            (
+              element.matches(QUEUE_PANEL_SELECTOR) ||
+              element.querySelector?.(QUEUE_PANEL_SELECTOR)
+            )
+          );
+        }
+
+        function mutationChangesQueuePanelTopology(mutation) {
+          return [...mutation.addedNodes, ...mutation.removedNodes]
+            .some(nodeContainsQueuePanel);
+        }
+
+        function mutationTouchesQueueContent(mutation) {
+          const target = getMutationElement(mutation.target);
+          if (target?.closest(QUEUE_PANEL_SELECTOR)) return true;
+
+          return [...mutation.addedNodes, ...mutation.removedNodes]
+            .some((node) => {
+              const element = getMutationElement(node);
+              return Boolean(
+                element &&
+                (
+                  element.matches(QUEUE_ITEM_SELECTOR) ||
+                  element.querySelector?.(QUEUE_ITEM_SELECTOR)
+                )
+              );
+            });
+        }
+
+        function isQueuePanelStateMutation(panel, mutation) {
+          const target = getMutationElement(mutation.target);
+          if (!target) return false;
+
+          const targetContainsPanel = target !== panel && target.contains(panel);
+          if (!targetContainsPanel && !panel.contains(target)) return false;
+          if (targetContainsPanel) {
+            return QUEUE_VISIBILITY_STATE_ATTRIBUTES.includes(
+              mutation.attributeName,
+            );
+          }
+          if (target === panel) return true;
 
           if (
-            isBodyActive() &&
-            mutations.some((mutation) => {
-              const target =
-                mutation.target.nodeType === Node.ELEMENT_NODE
-                  ? mutation.target
-                  : mutation.target.parentElement;
-              if (target && target.closest(QUEUE_PANEL_SELECTOR)) return true;
-
-              return Array.from(mutation.addedNodes || []).some((node) => {
-                if (node.nodeType !== Node.ELEMENT_NODE) return false;
-                return (
-                  node.matches(QUEUE_PANEL_SELECTOR) ||
-                  Boolean(node.querySelector(QUEUE_PANEL_SELECTOR))
-                );
-              });
-            })
+            mutation.attributeName === "aria-current" ||
+            mutation.attributeName === "aria-selected" ||
+            mutation.attributeName === "selected"
           ) {
-            scheduleCompactQueueInfoSync();
+            return true;
+          }
+
+          return Boolean(
+            (mutation.attributeName === "class" ||
+              mutation.attributeName === "hidden" ||
+              mutation.attributeName === "aria-hidden" ||
+              mutation.attributeName === "style") &&
+            (
+              target.matches(QUEUE_ITEM_SELECTOR) ||
+              target.querySelector?.(QUEUE_ITEM_SELECTOR)
+            )
+          );
+        }
+
+        function stopQueuePanelObservation() {
+          queuePanelObservers.forEach((observer) => observer.disconnect());
+          queuePanelObservers.clear();
+        }
+
+        function syncQueuePanelObservation(force = false) {
+          if (force) stopQueuePanelObservation();
+
+          const panels = new Set(
+            mutationObserverActive && !navigationInProgress && isEligiblePath()
+              ? document.querySelectorAll(QUEUE_PANEL_SELECTOR)
+              : [],
+          );
+
+          queuePanelObservers.forEach((observer, panel) => {
+            if (panels.has(panel) && panel.isConnected) return;
+            observer.disconnect();
+            queuePanelObservers.delete(panel);
+          });
+
+          panels.forEach((panel) => {
+            if (queuePanelObservers.has(panel)) return;
+
+            const observer = new MutationObserver((mutations) => {
+              if (navigationInProgress || !isEligiblePath()) return;
+              if (mutations.some((mutation) => isQueuePanelStateMutation(panel, mutation))) {
+                scheduleCompactQueueInfoSync();
+              }
+            });
+            observer.observe(panel, {
+              attributeFilter: QUEUE_PANEL_STATE_ATTRIBUTES,
+              attributes: true,
+              subtree: true,
+            });
+            let ancestor = panel.parentElement;
+            while (ancestor && ancestor !== document.body) {
+              observer.observe(ancestor, {
+                attributeFilter: QUEUE_VISIBILITY_STATE_ATTRIBUTES,
+                attributes: true,
+              });
+              if (ancestor.matches(WATCH_ROOT_SELECTOR)) break;
+              ancestor = ancestor.parentElement;
+            }
+            queuePanelObservers.set(panel, observer);
+          });
+        }
+
+        const mutationObserver = new MutationObserver((mutations) => {
+          if (reconcileTrackedPlayer()) {
+            scheduleRouteSync();
+          }
+          if (navigationInProgress || !isEligiblePath()) return;
+
+          const queuePanelTopologyChanged = mutations.some(
+            mutationChangesQueuePanelTopology,
+          );
+          if (queuePanelTopologyChanged) {
+            syncQueuePanelObservation(true);
+          }
+
+          const queueContentChanged =
+            queuePanelTopologyChanged ||
+            mutations.some(mutationTouchesQueueContent);
+          if (queueContentChanged) {
+            if (isBodyActive()) scheduleCompactQueueInfoSync();
           }
 
           if (getTriggerAnchor()) return;
@@ -6028,12 +8228,11 @@
           if (mutationObserverActive || navigationInProgress || !isEligiblePath()) return;
 
           mutationObserver.observe(document.documentElement, {
-            attributeFilter: ["aria-current", "selected"],
-            attributes: true,
             childList: true,
             subtree: true,
           });
           mutationObserverActive = true;
+          syncQueuePanelObservation();
         }
 
         function stopMutationObservation() {
@@ -6041,6 +8240,7 @@
 
           mutationObserver.disconnect();
           mutationObserverActive = false;
+          stopQueuePanelObservation();
         }
 
         suite.addWindowListener("resize", () => {
@@ -6063,21 +8263,27 @@
           }
         }, true);
 
+        document.addEventListener("loadedmetadata", (event) => {
+          if (
+            floatedPlayer &&
+            event.target instanceof HTMLMediaElement &&
+            reconcileTrackedPlayer()
+          ) {
+            scheduleRouteSync();
+          }
+        }, true);
+
         suite.addWindowListener("yt-navigate-start", () => {
-          navigationInProgress = true;
+          beginNavigationLock();
           deactivateImmediately();
         }, true);
         suite.addWindowListener("yt-navigate-finish", () => {
-          navigationInProgress = false;
-          suppressedUntilVisible = false;
-          scheduleRouteSync();
+          finishNavigationLock();
         }, true);
         suite.addWindowListener("yt-page-data-updated", scheduleRouteSync, true);
         suite.addWindowListener("pageshow", () => {
           // A BFCache restore may not emit a matching YouTube navigation finish.
-          navigationInProgress = false;
-          suppressedUntilVisible = false;
-          scheduleRouteSync();
+          finishNavigationLock();
         }, true);
 
         syncRouteState();
@@ -6086,7 +8292,7 @@
 
   suite.registerModule(
     "watchLayoutCleaner",
-    "Watch Layout Cleaner v1.25",
+    "Watch Layout Cleaner v1.26",
     "document-start",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -6101,7 +8307,11 @@
         };
 
         const STYLE_ID = "tm-youtube-watch-layout-cleaner";
-        const PLAYLIST_PANEL_SELECTOR = "ytd-playlist-panel-renderer";
+        const PLAYLIST_PANEL_SELECTORS = [
+          "ytd-playlist-panel-renderer",
+          "yt-playlist-panel-renderer",
+        ];
+        const PLAYLIST_PANEL_SELECTOR = PLAYLIST_PANEL_SELECTORS.join(",");
         const QUEUE_THUMBNAIL_FALLBACK_DELAYS_MS = [750, 1500];
         const QUEUE_ITEM_SELECTOR = [
           "ytd-playlist-panel-video-renderer",
@@ -6118,6 +8328,49 @@
         const QUEUE_THUMBNAIL_FALLBACK_CSS_PROPERTY =
           "--ywlc-thumbnail-fallback-image";
         const QUEUE_THUMBNAIL_FALLBACK_ROOT_MARGIN = "200px 0px";
+        const QUEUE_THUMBNAIL_FALLBACK_STYLE_SELECTOR = PLAYLIST_PANEL_SELECTORS.map(
+          (panelSelector) =>
+            `${panelSelector} [${QUEUE_THUMBNAIL_FALLBACK_ATTRIBUTE}="1"]`,
+        ).join(",\n");
+        const EMPTY_SECONDARY_RAIL_ATTRIBUTE = "data-ywlc-empty-secondary-rail";
+        const CHAT_SURFACE_SELECTOR = [
+          "ytd-live-chat-frame#chat",
+          'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-live-chat"]',
+          "ytd-engagement-panel-section-list-renderer:has(yt-live-chat-app)",
+        ].join(",");
+        const RAIL_MUTATION_TARGET_SELECTOR = [
+          PLAYLIST_PANEL_SELECTOR,
+          CHAT_SURFACE_SELECTOR,
+          "#chat-container",
+          "#panels",
+          "#related",
+          "#secondary",
+          "#secondary-inner",
+        ].join(",");
+        const QUEUE_ITEM_MUTATION_ATTRIBUTES = [
+          "aria-current",
+          "aria-selected",
+          "href",
+          "selected",
+          "src",
+        ];
+        const SURFACE_STATE_MUTATION_ATTRIBUTES = [
+          "aria-current",
+          "aria-hidden",
+          "aria-selected",
+          "class",
+          "collapsed",
+          "hidden",
+          "selected",
+          "style",
+        ];
+        const DISCOVERY_MUTATION_ATTRIBUTES = [
+          ...new Set([
+            ...QUEUE_ITEM_MUTATION_ATTRIBUTES,
+            ...SURFACE_STATE_MUTATION_ATTRIBUTES,
+          ]),
+        ];
+        const PANEL_MUTATION_ATTRIBUTES = DISCOVERY_MUTATION_ATTRIBUTES;
         const WATCH_FLEXY_SELECTORS = [
           "ytd-watch-flexy[flexy]",
           "ytd-watch-flexy[flexy_]",
@@ -6128,16 +8381,23 @@
           "ytd-watch-flexy[is-watch-wide]",
         ];
         const WATCH_FLEXY_SELECTOR = WATCH_FLEXY_SELECTORS.join(",\n");
-        const TWO_COLUMN_WATCH_FLEXY_SELECTOR = [
+        const TWO_COLUMN_WATCH_FLEXY_SELECTORS = [
           "ytd-watch-flexy[is-two-columns]",
           "ytd-watch-flexy[is-two-columns_]",
-        ].join(",\n");
-        const COLLAPSED_CHAT_WITHOUT_QUEUE_SELECTOR = [
-          "ytd-watch-flexy[is-two-columns]:has(ytd-live-chat-frame#chat[collapsed]):not(:has(ytd-playlist-panel-renderer))",
-          "ytd-watch-flexy[is-two-columns_]:has(ytd-live-chat-frame#chat[collapsed]):not(:has(ytd-playlist-panel-renderer))",
-        ].join(",\n");
+        ];
+        const TWO_COLUMN_WATCH_FLEXY_SELECTOR =
+          TWO_COLUMN_WATCH_FLEXY_SELECTORS.join(",\n");
+        const EMPTY_SECONDARY_RAIL_SELECTOR =
+          TWO_COLUMN_WATCH_FLEXY_SELECTORS.map(
+            (watchSelector) =>
+              `${watchSelector}[${EMPTY_SECONDARY_RAIL_ATTRIBUTE}="1"]`,
+          ).join(",\n");
         let queueThumbnailFallbackTimers = [];
         let queueThumbnailFallbackObserver = null;
+        let observedRailMutationTargets = new Set();
+        let queueThumbnailMutationFrame = 0;
+        let railStateReconciliationFrame = 0;
+        const pendingQueueThumbnailItems = new Set();
 
         function px(value) {
           return `${value}px`;
@@ -6171,11 +8431,18 @@
           min-width: ${px(CONFIG.sidebarWidthPx)} !important;
           max-width: ${px(CONFIG.sidebarWidthPx)} !important;
         }
+
+        ${TWO_COLUMN_WATCH_FLEXY_SELECTORS.map((watchSelector) => `${watchSelector}[${EMPTY_SECONDARY_RAIL_ATTRIBUTE}="1"] #secondary.ytd-watch-flexy`).join(",\n  ")}{
+          flex: 0 0 0 !important;
+          width: 0 !important;
+          min-width: 0 !important;
+          max-width: 0 !important;
+        }
       }
 
-      /* At half-screen, a collapsed chat must not leave an empty sidebar behind. */
-      @media (min-width: ${px(CONFIG.queueLayoutBreakpointPx + 1)}) and (max-width: ${px(CONFIG.relatedVideosHideBreakpointPx)}) {
-        ${COLLAPSED_CHAT_WITHOUT_QUEUE_SELECTOR}{
+      /* Collapse only a rail confirmed empty by the live DOM-state reconciliation. */
+      @media (min-width: ${px(CONFIG.queueLayoutBreakpointPx + 1)}) {
+        ${EMPTY_SECONDARY_RAIL_SELECTOR}{
           --ytd-watch-flexy-sidebar-width: 0px !important;
         }
       }
@@ -6214,7 +8481,7 @@
         max-width: 100% !important;
       }
 
-      ytd-playlist-panel-renderer [${QUEUE_THUMBNAIL_FALLBACK_ATTRIBUTE}="1"] {
+      ${QUEUE_THUMBNAIL_FALLBACK_STYLE_SELECTOR} {
         background-image: var(${QUEUE_THUMBNAIL_FALLBACK_CSS_PROPERTY}) !important;
         background-position: center !important;
         background-repeat: no-repeat !important;
@@ -6335,11 +8602,301 @@
           return queueThumbnailFallbackObserver;
         }
 
-        function applyQueueThumbnailFallbacks() {
+        function addQueueItemsFromNode(items, node) {
+          const element =
+            node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+          if (!element) return;
+
+          const closestItem = element.closest?.(QUEUE_ITEM_SELECTOR);
+          if (closestItem?.closest(PLAYLIST_PANEL_SELECTOR)) {
+            items.add(closestItem);
+          }
+          element.querySelectorAll?.(QUEUE_ITEM_SELECTOR).forEach((item) => {
+            if (item.closest(PLAYLIST_PANEL_SELECTOR)) items.add(item);
+          });
+        }
+
+        function flushPendingQueueThumbnailItems() {
+          queueThumbnailMutationFrame = 0;
+          const items = Array.from(pendingQueueThumbnailItems);
+          pendingQueueThumbnailItems.clear();
           if (!isWatchPath()) return;
 
           const observer = getQueueThumbnailFallbackObserver();
-          document.querySelectorAll(PLAYLIST_PANEL_SELECTOR).forEach((panel) => {
+          items.forEach((item) => {
+            if (!item.isConnected || !item.closest(PLAYLIST_PANEL_SELECTOR)) return;
+            if (observer) {
+              observer.observe(item);
+            } else {
+              applyQueueThumbnailFallback(item);
+            }
+          });
+        }
+
+        function scheduleQueueThumbnailItems(items) {
+          items.forEach((item) => pendingQueueThumbnailItems.add(item));
+          if (!pendingQueueThumbnailItems.size || queueThumbnailMutationFrame) return;
+
+          queueThumbnailMutationFrame = requestAnimationFrame(
+            flushPendingQueueThumbnailItems,
+          );
+        }
+
+        function canRenderSurface(element) {
+          if (
+            !element?.isConnected ||
+            element.hidden ||
+            element.getAttribute("aria-hidden") === "true"
+          ) {
+            return false;
+          }
+
+          const style = getComputedStyle(element);
+          return style.display !== "none" && !["hidden", "collapse"].includes(
+            style.visibility,
+          );
+        }
+
+        function isElementOrAncestorHidden(element, boundary) {
+          if (!element?.isConnected) return true;
+
+          let current = element;
+          while (current) {
+            if (!canRenderSurface(current)) return true;
+            if (current === boundary) return false;
+            current = current.parentElement;
+          }
+          return true;
+        }
+
+        function isActiveChatSurface(surface) {
+          return (
+            !surface.hasAttribute("collapsed") &&
+            !isElementOrAncestorHidden(surface, surface.closest("ytd-watch-flexy"))
+          );
+        }
+
+        function isActiveQueuePanel(panel) {
+          return (
+            Boolean(panel.querySelector(QUEUE_ITEM_SELECTOR)) &&
+            !isElementOrAncestorHidden(panel, panel.closest("ytd-watch-flexy"))
+          );
+        }
+
+        function reconcileSecondaryRailState() {
+          railStateReconciliationFrame = 0;
+          document.querySelectorAll("ytd-watch-flexy").forEach((watchFlexy) => {
+            const eligible =
+              isWatchPath() && watchFlexy.matches(TWO_COLUMN_WATCH_FLEXY_SELECTOR);
+            const related = eligible ? watchFlexy.querySelector("#related") : null;
+            const relatedHidden =
+              eligible &&
+              (!related || isElementOrAncestorHidden(related, watchFlexy));
+            const chatVisible =
+              eligible &&
+              Array.from(watchFlexy.querySelectorAll(CHAT_SURFACE_SELECTOR)).some(
+                isActiveChatSurface,
+              );
+            const queueVisible =
+              eligible &&
+              Array.from(
+                watchFlexy.querySelectorAll(PLAYLIST_PANEL_SELECTOR),
+              ).some(isActiveQueuePanel);
+            const railIsEmpty =
+              eligible && relatedHidden && !chatVisible && !queueVisible;
+
+            if (railIsEmpty) {
+              watchFlexy.setAttribute(EMPTY_SECONDARY_RAIL_ATTRIBUTE, "1");
+            } else {
+              watchFlexy.removeAttribute(EMPTY_SECONDARY_RAIL_ATTRIBUTE);
+            }
+          });
+        }
+
+        function scheduleSecondaryRailStateReconciliation() {
+          if (railStateReconciliationFrame) return;
+          railStateReconciliationFrame = requestAnimationFrame(
+            reconcileSecondaryRailState,
+          );
+        }
+
+        function getRailMutationTargets() {
+          if (!isWatchPath()) return [];
+
+          const targets = new Set();
+          document.querySelectorAll("ytd-watch-flexy").forEach((watchFlexy) => {
+            watchFlexy
+              .querySelectorAll(RAIL_MUTATION_TARGET_SELECTOR)
+              .forEach((target) => targets.add(target));
+            const secondary = watchFlexy.querySelector("#secondary");
+            targets.add(secondary || watchFlexy);
+            if (secondary?.parentElement) {
+              targets.add(secondary.parentElement);
+            }
+          });
+          return Array.from(targets);
+        }
+
+        function getNodeElement(node) {
+          return node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+        }
+
+        function nodeContainsRailMutationTarget(node) {
+          const element = getNodeElement(node);
+          return Boolean(
+            element &&
+              (element.matches(RAIL_MUTATION_TARGET_SELECTOR) ||
+                element.querySelector(RAIL_MUTATION_TARGET_SELECTOR)),
+          );
+        }
+
+        function nodeContainsQueueItem(node) {
+          const element = getNodeElement(node);
+          return Boolean(
+            element &&
+              (element.matches(QUEUE_ITEM_SELECTOR) ||
+                element.querySelector(QUEUE_ITEM_SELECTOR)),
+          );
+        }
+
+        function isDiscoveryMutationTarget(target) {
+          return target.matches("ytd-watch-flexy, #secondary");
+        }
+
+        function isSecondaryRailMutationAnchor(target) {
+          return Array.from(target.children || []).some(
+            (child) =>
+              child.matches?.("#secondary") &&
+              child.closest("ytd-watch-flexy") === target.closest("ytd-watch-flexy"),
+          );
+        }
+
+        function mutationAffectsRailState(mutation) {
+          const element = getNodeElement(mutation.target);
+          if (!element) return false;
+
+          if (mutation.type === "attributes") {
+            if (
+              ["aria-current", "aria-selected", "selected"].includes(
+                mutation.attributeName,
+              ) &&
+              element.closest(QUEUE_ITEM_SELECTOR)
+            ) {
+              return true;
+            }
+            return (
+              SURFACE_STATE_MUTATION_ATTRIBUTES.includes(mutation.attributeName) &&
+              (element.matches(RAIL_MUTATION_TARGET_SELECTOR) ||
+                isDiscoveryMutationTarget(element))
+            );
+          }
+
+          if (mutation.type !== "childList") return false;
+          const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
+          if (element.closest(`${CHAT_SURFACE_SELECTOR}, #chat-container`)) {
+            return true;
+          }
+          if (element.closest(PLAYLIST_PANEL_SELECTOR)) {
+            return changedNodes.some(nodeContainsQueueItem);
+          }
+          return changedNodes.some(
+            (node) =>
+              nodeContainsRailMutationTarget(node) || nodeContainsQueueItem(node),
+          );
+        }
+
+        function refreshRailMutationObserver() {
+          const nextTargets = new Set(getRailMutationTargets());
+          if (
+            nextTargets.size === observedRailMutationTargets.size &&
+            [...nextTargets].every((target) =>
+              observedRailMutationTargets.has(target),
+            )
+          ) {
+            return;
+          }
+
+          railMutationObserver.disconnect();
+          observedRailMutationTargets = nextTargets;
+          observedRailMutationTargets.forEach((target) => {
+            const isSecondaryRailAnchor =
+              isSecondaryRailMutationAnchor(target);
+            const isDiscoveryTarget = isDiscoveryMutationTarget(target);
+            const isPlaylistPanel = target.matches(PLAYLIST_PANEL_SELECTOR);
+            railMutationObserver.observe(
+              target,
+              isSecondaryRailAnchor
+                ? {
+                    childList: true,
+                  }
+                : isDiscoveryTarget
+                ? {
+                    attributeFilter: DISCOVERY_MUTATION_ATTRIBUTES,
+                    attributes: true,
+                    childList: true,
+                    subtree: true,
+                  }
+                : isPlaylistPanel
+                ? {
+                    attributeFilter: PANEL_MUTATION_ATTRIBUTES,
+                    attributes: true,
+                    childList: true,
+                    subtree: true,
+                  }
+                : {
+                    attributeFilter: SURFACE_STATE_MUTATION_ATTRIBUTES,
+                    attributes: true,
+                    childList: target.matches(
+                      "#chat-container, ytd-engagement-panel-section-list-renderer",
+                    ),
+                  },
+            );
+          });
+        }
+
+        const railMutationObserver = new MutationObserver((mutations) => {
+          if (!isWatchPath()) return;
+
+          const items = new Set();
+          let railStateMayHaveChanged = false;
+          let targetsMayHaveChanged = false;
+          mutations.forEach((mutation) => {
+            railStateMayHaveChanged ||= mutationAffectsRailState(mutation);
+            if (mutation.type === "attributes") {
+              if (QUEUE_ITEM_MUTATION_ATTRIBUTES.includes(mutation.attributeName)) {
+                addQueueItemsFromNode(items, mutation.target);
+              }
+              return;
+            }
+            if (mutation.type !== "childList") return;
+
+            addQueueItemsFromNode(items, mutation.target);
+            mutation.addedNodes?.forEach((node) => addQueueItemsFromNode(items, node));
+            targetsMayHaveChanged ||=
+              Array.from(mutation.addedNodes || []).some(
+                nodeContainsRailMutationTarget,
+              ) ||
+              Array.from(mutation.removedNodes || []).some(
+                nodeContainsRailMutationTarget,
+              );
+          });
+          scheduleQueueThumbnailItems(items);
+          if (railStateMayHaveChanged) {
+            scheduleSecondaryRailStateReconciliation();
+          }
+          if (targetsMayHaveChanged) refreshRailMutationObserver();
+        });
+
+        function applyQueueThumbnailFallbacks() {
+          const panels = isWatchPath()
+            ? Array.from(document.querySelectorAll(PLAYLIST_PANEL_SELECTOR))
+            : [];
+          refreshRailMutationObserver();
+          scheduleSecondaryRailStateReconciliation();
+          if (!panels.length) return;
+
+          const observer = getQueueThumbnailFallbackObserver();
+          panels.forEach((panel) => {
             panel.querySelectorAll(QUEUE_ITEM_SELECTOR).forEach((item) => {
               if (observer) {
                 observer.observe(item);
@@ -6356,6 +8913,8 @@
             queueThumbnailFallbackObserver.takeRecords();
           }
           queueThumbnailFallbackTimers.forEach((timerId) => clearTimeout(timerId));
+          refreshRailMutationObserver();
+          scheduleSecondaryRailStateReconciliation();
           queueThumbnailFallbackTimers = QUEUE_THUMBNAIL_FALLBACK_DELAYS_MS.map(
             (delay) => setTimeout(applyQueueThumbnailFallbacks, delay),
           );
@@ -6370,6 +8929,13 @@
         narrowLayoutMediaQuery.addEventListener(
           "change",
           scheduleQueueThumbnailFallbacks,
+        );
+        const relatedVideosMediaQuery = matchMedia(
+          `(max-width: ${px(CONFIG.relatedVideosHideBreakpointPx)})`,
+        );
+        relatedVideosMediaQuery.addEventListener(
+          "change",
+          scheduleSecondaryRailStateReconciliation,
         );
 
         // YouTube is an SPA; re-apply after in-site navigation

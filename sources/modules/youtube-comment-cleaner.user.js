@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Comment Cleaner
 // @namespace    Citizen.youtube.comment-cleaner
-// @version      1.14
+// @version      1.15
 // @description  Cleans YouTube comments, prevents stale comments across SPA navigation, preserves replies, compacts spacing, and colours commenter/uploader names.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -54,6 +54,9 @@
     "yt-comment-view-model #vote-count-middle",
     "yt-comment-view-model like-button-view-model",
     "yt-comment-view-model dislike-button-view-model",
+    "yt-comment-view-model #reply-button-end",
+    "yt-comment-view-model #action-menu",
+    "yt-comment-view-model ytd-menu-renderer",
     "ytd-comments #reply-dialog",
     "ytd-comments #simple-box",
     "ytd-comments #teaser-carousel",
@@ -63,6 +66,9 @@
     "ytd-comment-view-model #reply-dialog",
     "ytd-comment-view-model #simple-box",
     "ytd-comment-view-model #teaser-carousel",
+    "yt-comment-view-model #reply-dialog",
+    "yt-comment-view-model #simple-box",
+    "yt-comment-view-model #teaser-carousel",
   ];
 
   const COMMENT_CONTROL_SELECTOR = COMMENT_CONTROL_SELECTORS.join(",");
@@ -74,6 +80,9 @@
     'ytd-comment-view-model yt-icon-button > button#button[aria-label*="Action menu" i]',
     'ytd-comment-view-model yt-icon-button > button#button[aria-label*="More actions" i]',
     'ytd-comment-view-model yt-icon-button > button#button[aria-label*="More options" i]',
+    'yt-comment-view-model yt-icon-button > button#button[aria-label*="Action menu" i]',
+    'yt-comment-view-model yt-icon-button > button#button[aria-label*="More actions" i]',
+    'yt-comment-view-model yt-icon-button > button#button[aria-label*="More options" i]',
   ];
 
   const COMMENT_OVERFLOW_BUTTON_SELECTOR =
@@ -93,6 +102,7 @@
     "ytd-comment-thread-renderer",
     "ytd-comment-renderer",
     "ytd-comment-view-model",
+    "yt-comment-view-model",
     "ytd-comment-replies-renderer",
   ].join(",");
   const UPLOADER_SOURCE_SELECTOR = [
@@ -407,18 +417,21 @@ ytd-comments[${STALE_COMMENTS_ATTRIBUTE}="1"] {
     return `
 /* Tighten comment spacing */
 ytd-comment-renderer #main,
-ytd-comment-view-model #main {
+ytd-comment-view-model #main,
+yt-comment-view-model #main {
   margin:0 !important;
 }
 
 ytd-comment-renderer #body,
-ytd-comment-view-model #body {
+ytd-comment-view-model #body,
+yt-comment-view-model #body {
   margin:0 !important;
   padding:0 !important;
 }
 
 ytd-comment-renderer #footer,
-ytd-comment-view-model #footer {
+ytd-comment-view-model #footer,
+yt-comment-view-model #footer {
   margin:0 !important;
   padding:0 !important;
 }
@@ -447,7 +460,10 @@ ytd-comment-renderer #pinned-comment-badge a,
 ytd-comment-renderer #pinned-comment-badge yt-formatted-string,
 ytd-comment-view-model #pinned-comment-badge,
 ytd-comment-view-model #pinned-comment-badge a,
-ytd-comment-view-model #pinned-comment-badge yt-formatted-string {
+ytd-comment-view-model #pinned-comment-badge yt-formatted-string,
+yt-comment-view-model #pinned-comment-badge,
+yt-comment-view-model #pinned-comment-badge a,
+yt-comment-view-model #pinned-comment-badge yt-formatted-string {
   color:var(--uploader-orange) !important;
   -webkit-text-fill-color:var(--uploader-orange) !important;
   background:transparent !important;
@@ -473,7 +489,9 @@ ytd-author-comment-badge-renderer yt-formatted-string,
 ytd-comment-renderer #header-badge,
 ytd-comment-renderer #header-author-badges,
 ytd-comment-view-model #header-badge,
-ytd-comment-view-model #header-author-badges {
+ytd-comment-view-model #header-author-badges,
+yt-comment-view-model #header-badge,
+yt-comment-view-model #header-author-badges {
   background:transparent !important;
 }
 `;

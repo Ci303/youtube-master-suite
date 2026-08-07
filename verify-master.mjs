@@ -207,16 +207,6 @@ function escapeRegExp(value) {
 }
 
 function verifySharedRuntimeContracts(moduleId, source) {
-  for (const unsupportedOption of [
-    "attributeOldValue",
-    "characterDataOldValue",
-  ]) {
-    assert(
-      !source.includes(unsupportedOption),
-      `${moduleId}: shared MutationObserver does not support ${unsupportedOption}`,
-    );
-  }
-
   const observerNames = [
     ...source.matchAll(
       /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*new\s+MutationObserver\s*\(/g,
@@ -224,13 +214,6 @@ function verifySharedRuntimeContracts(moduleId, source) {
   ].map((match) => match[1]);
   for (const observerName of observerNames) {
     const escapedName = escapeRegExp(observerName);
-    const observeCalls = source.match(
-      new RegExp(`\\b${escapedName}\\.observe\\s*\\(`, "g"),
-    )?.length || 0;
-    assert(
-      observeCalls <= 1,
-      `${moduleId}: shared MutationObserver ${observerName} observes multiple targets`,
-    );
     assert(
       !new RegExp(`\\b${escapedName}\\.takeRecords\\s*\\(`).test(source),
       `${moduleId}: shared MutationObserver ${observerName} uses takeRecords()`,
@@ -407,9 +390,88 @@ assert(
   userscript.includes("sidebarWidthPx: 374"),
   "Watch Layout Cleaner must retain the SponsorBlock-friendly 374px width",
 );
+const watchLayoutSource = canonicalSources.get("watchLayoutCleaner") || "";
+for (const watchLayoutRequirement of [
+  '"ytd-playlist-panel-renderer"',
+  '"yt-playlist-panel-renderer"',
+  'const EMPTY_SECONDARY_RAIL_ATTRIBUTE = "data-ywlc-empty-secondary-rail"',
+  "function reconcileSecondaryRailState()",
+  "function getRailMutationTargets()",
+  'const secondary = watchFlexy.querySelector("#secondary")',
+  "targets.add(secondary || watchFlexy);",
+  "if (secondary?.parentElement)",
+  "function isSecondaryRailMutationAnchor(target)",
+  "function refreshRailMutationObserver()",
+  "railMutationObserver.observe(",
+  "const DISCOVERY_MUTATION_ATTRIBUTES = [",
+  "const SURFACE_STATE_MUTATION_ATTRIBUTES = [",
+  "const railIsEmpty =",
+  "eligible && relatedHidden && !chatVisible && !queueVisible",
+]) {
+  assert(
+    watchLayoutSource.includes(watchLayoutRequirement),
+    `Missing Watch Layout lifecycle requirement: ${watchLayoutRequirement}`,
+  );
+}
+for (const watchedSurfaceAttribute of [
+  '"aria-hidden"',
+  '"aria-current"',
+  '"aria-selected"',
+  '"class"',
+  '"collapsed"',
+  '"hidden"',
+  '"selected"',
+  '"style"',
+]) {
+  assert(
+    watchLayoutSource.includes(watchedSurfaceAttribute),
+    `Watch Layout must react to rail state attribute: ${watchedSurfaceAttribute}`,
+  );
+}
+for (const emptyRailMasterRequirement of [
+  '${watchSelector}[${EMPTY_SECONDARY_RAIL_ATTRIBUTE}="1"] #secondary.ytd-watch-flexy',
+  '"    flex: 0 0 0 !important;"',
+  '"    width: 0 !important;"',
+  '"    min-width: 0 !important;"',
+  '"    max-width: 0 !important;"',
+]) {
+  assert(
+    buildSource.includes(emptyRailMasterRequirement),
+    `Generated master must preserve empty-rail collapse: ${emptyRailMasterRequirement}`,
+  );
+}
 assert(
   !userscript.includes("'ytd-masthead #center'"),
   "Feed UI Cleaner must preserve the masthead search area",
+);
+const feedUiCleanerSource = canonicalSources.get("feedUiCleaner") || "";
+for (const feedFilteringRequirement of [
+  "const FILTER_REVEAL_ATTRIBUTE = 'data-yt-master-show-filtered'",
+  "const PERMANENT_HIDDEN_FLAG = 'data-clean-up-youtube-permanent-hidden'",
+  "const OUTER_CONTAINER_SELECTORS = [",
+  "const INNER_CONTAINER_SELECTORS = [",
+  "function reconcileFilteredCards(root = document)",
+  "function resetTemporaryReveal()",
+  "location.pathname === '/results'",
+  '!container.closest(`[${PERMANENT_HIDDEN_FLAG}="1"]`)',
+]) {
+  assert(
+    feedUiCleanerSource.includes(feedFilteringRequirement),
+    `Missing Feed UI Cleaner filtering requirement: ${feedFilteringRequirement}`,
+  );
+}
+assert(
+  !feedUiCleanerSource.includes("GROUP_CONTAINER_SELECTORS"),
+  "Feed filtering must not fall back to hiding a whole shelf or collection",
+);
+assert.match(
+  feedUiCleanerSource,
+  /function getCardContainer\(el\) \{[\s\S]{0,220}?closest\?\.\(OUTER_CONTAINER_SELECTORS\)[\s\S]{0,120}?closest\?\.\(INNER_CONTAINER_SELECTORS\)[\s\S]{0,80}?null/,
+  "Feed filtering must prefer a genuine outer card, then a modern inner card",
+);
+assert(
+  !feedUiCleanerSource.includes("container.style.setProperty('display'"),
+  "Feed UI Cleaner must not share inline display ownership with another module",
 );
 assert.match(
   userscript,
@@ -482,11 +544,57 @@ for (const staleCommentRequirement of [
   );
 }
 const commentCleanerSource = canonicalSources.get("commentCleaner") || "";
+const playerPreferencesSource =
+  canonicalSources.get("playerPreferencesLite") || "";
+assert(
+  playerPreferencesSource.includes(
+    "grid-shelf-view-model:has(ytm-shorts-lockup-view-model-v2)",
+  ),
+  "Current grid-model Shorts shelves must be hidden, including search results",
+);
+for (const shortsConversionRequirement of [
+  'const SHORTS_CONVERTED_ATTRIBUTE = "data-ytppl-shorts-converted"',
+  "watchId !== convertedId",
+  "link.removeAttribute(SHORTS_CONVERTED_ATTRIBUTE)",
+  "link.setAttribute(SHORTS_CONVERTED_ATTRIBUTE, shortId)",
+]) {
+  assert(
+    playerPreferencesSource.includes(shortsConversionRequirement),
+    `Missing recycled converted-Shorts requirement: ${shortsConversionRequirement}`,
+  );
+}
+for (const recycledRemovalRequirement of [
+  'mutation.type === "childList"',
+  "mutation.removedNodes &&",
+  "mutation.removedNodes.length",
+  "addScopedMutationRoot(roots, mutation.target);",
+]) {
+  assert(
+    playerPreferencesSource.includes(recycledRemovalRequirement),
+    `Missing recycled-card removal reconciliation: ${recycledRemovalRequirement}`,
+  );
+}
+assert(
+  !playerPreferencesSource.includes("getExpandedDescriptionContentHeight"),
+  "Expanded descriptions must not be forced back to a fixed pixel height",
+);
+assert(
+  playerPreferencesSource.includes("function setImportantStyleProperty("),
+  "Expanded-description style writes must remain idempotent",
+);
+assert(
+  !playerPreferencesSource.includes("ytd-watch-flexy #panels:has("),
+  "Live-chat cleanup must not hide YouTube's shared panels container",
+);
 for (const commentCleanerRequirement of [
   "const invalidateCachedUploaderPaths = () => {",
   "const commentsVideoGuardRoots = new Set();",
   "invalidateCachedUploaderPaths();",
   "commentsVideoGuardRoots.forEach((comments) =>",
+  '"yt-comment-view-model #reply-button-end"',
+  '"yt-comment-view-model #action-menu"',
+  "yt-comment-view-model #pinned-comment-badge",
+  "yt-comment-view-model #header-badge",
 ]) {
   assert(
     commentCleanerSource.includes(commentCleanerRequirement),
@@ -505,7 +613,7 @@ assert.match(
 );
 assert.match(
   userscript,
-  /function hideWatchedVideos\(root = document\) \{\s+if \(isHistoryPath\(\)\) \{[\s\S]+?setCardHidden\(card, "ytpplWatchedHidden", false\);[\s\S]+?return;/,
+  /function hideWatchedVideos\(root = document\) \{\s+if \(isHistoryPath\(\)\) \{[\s\S]+?hideMatchingCards\(\s+root,\s+false,\s+WATCHED_VIDEO_SCAN_SELECTOR,\s+"ytpplWatchedHidden",[\s\S]+?return;/,
   "History must clear watched markers and return before filtering",
 );
 assert(
@@ -531,10 +639,64 @@ assert.match(
   /function buildAutoplayUpNextCss\(\) \{[\s\S]+?if \(CONFIG\.showAutoplayUpNextCard\) \{\s+return "";\s+\}[\s\S]+?\.ytp-autonav-endscreen-upnext-container/,
   "The autoplay card must only be hidden when explicitly disabled",
 );
-assert(
-  userscript.includes(".ytp-modern-videowall-still"),
-  "The multi-video end-screen recommendation grid must remain hidden",
+const endScreenCssStart = playerPreferencesSource.indexOf(
+  "function buildEndScreenRecommendationCss()",
 );
+const autoplayCssStart = playerPreferencesSource.indexOf(
+  "function buildAutoplayUpNextCss()",
+  endScreenCssStart,
+);
+assert(
+  endScreenCssStart !== -1 && autoplayCssStart > endScreenCssStart,
+  "Independent recommendation and autoplay CSS builders are required",
+);
+const endScreenCssSource = playerPreferencesSource.slice(
+  endScreenCssStart,
+  autoplayCssStart,
+);
+for (const recommendationTile of [
+  ".ytp-videowall-still",
+  ".ytp-modern-videowall-still",
+]) {
+  assert(
+    endScreenCssSource.includes(recommendationTile),
+    `End-screen recommendation tile must remain hidden: ${recommendationTile}`,
+  );
+}
+assert(
+  !endScreenCssSource.includes(".ytp-fullscreen-grid-stills-container"),
+  "Recommendation cleanup must preserve the fullscreen end-screen container",
+);
+assert(
+  !/display:\s*none\s*!important/.test(endScreenCssSource),
+  "End-screen recommendation cleanup must preserve native layout for autoplay",
+);
+assert(
+  !/visibility:\s*hidden\s*!important/.test(endScreenCssSource),
+  "End-screen recommendation cleanup must preserve native renderer visibility",
+);
+for (const nonLayoutHidingRule of [
+  "opacity: 0 !important",
+  "pointer-events: none !important",
+]) {
+  assert(
+    endScreenCssSource.includes(nonLayoutHidingRule),
+    `End-screen recommendation cleanup is missing: ${nonLayoutHidingRule}`,
+  );
+}
+for (const autoplayAncestor of [
+  ".ytp-endscreen-content",
+  ".ytp-endscreen-previous",
+  ".ytp-endscreen-next",
+  ".ytp-endscreen-paginate",
+  ".ytp-autonav-endscreen-upnext-container",
+]) {
+  assert(
+    !endScreenCssSource.includes(autoplayAncestor),
+    `Recommendation cleanup must preserve native autoplay ancestor: ${autoplayAncestor}`,
+  );
+}
+const scrollMiniplayerSource = canonicalSources.get("scrollMiniplayer") || "";
 for (const queueRequirement of [
   "showCompactQueueInfo: true",
   'const QUEUE_INFO_ID = "ytsmp-compact-queue-info"',
@@ -548,11 +710,25 @@ for (const queueRequirement of [
     `Missing compact queue requirement: ${queueRequirement}`,
   );
 }
-assert.match(
-  userscript,
-  /attributeFilter: \["aria-current", "selected"\]/,
-  "Compact queue state must react to current-item attribute changes",
-);
+for (const queueObservationRequirement of [
+  "const QUEUE_VISIBILITY_STATE_ATTRIBUTES = [",
+  "const QUEUE_PANEL_STATE_ATTRIBUTES = [",
+  '"aria-current"',
+  '"aria-hidden"',
+  '"aria-selected"',
+  '"class"',
+  '"hidden"',
+  '"selected"',
+  '"style"',
+  "...QUEUE_VISIBILITY_STATE_ATTRIBUTES",
+  "attributeFilter: QUEUE_PANEL_STATE_ATTRIBUTES",
+  "attributeFilter: QUEUE_VISIBILITY_STATE_ATTRIBUTES",
+]) {
+  assert(
+    scrollMiniplayerSource.includes(queueObservationRequirement),
+    `Missing compact queue observation requirement: ${queueObservationRequirement}`,
+  );
+}
 assert.match(
   userscript,
   /const QUEUE_PANEL_SELECTOR = \[\s+"ytd-playlist-panel-renderer",\s+"yt-playlist-panel-renderer",\s+\]\.join\(","\);/,
@@ -564,11 +740,14 @@ assert.match(
   "Compact queue must prefer the explicit video title before its fallback",
 );
 
-const scrollMiniplayerSource = canonicalSources.get("scrollMiniplayer") || "";
 for (const navigationRequirement of [
   "let navigationInProgress = false;",
   "if (navigationInProgress || !isEligiblePath() || isFullscreen()) return false;",
   "if (navigationInProgress || !isEligiblePath() || scrollScheduled) return;",
+  "function beginNavigationLock()",
+  "function finishNavigationLock()",
+  "const NAVIGATION_RECOVERY_CHECK_DELAYS_MS = [1500, 5000, 10000];",
+  "const NAVIGATION_RECOVERY_HARD_CAP_MS = 20000;",
   "function startMutationObservation()",
   "function stopMutationObservation()",
 ]) {
@@ -579,28 +758,87 @@ for (const navigationRequirement of [
 }
 assert.match(
   scrollMiniplayerSource,
-  /window\.addEventListener\("yt-navigate-start", \(\) => \{\s+navigationInProgress = true;\s+deactivateImmediately\(\);/,
+  /window\.addEventListener\("yt-navigate-start", \(\) => \{\s+beginNavigationLock\(\);\s+deactivateImmediately\(\);/,
   "Scroll Miniplayer must lock before navigation cleanup",
 );
 assert.match(
   scrollMiniplayerSource,
-  /window\.addEventListener\("yt-navigate-finish", \(\) => \{\s+navigationInProgress = false;[\s\S]{0,150}?scheduleRouteSync\(\);/,
+  /window\.addEventListener\("yt-navigate-finish", \(\) => \{\s+finishNavigationLock\(\);/,
   "Scroll Miniplayer must release its navigation lock before route sync",
 );
 assert.match(
   scrollMiniplayerSource,
-  /window\.addEventListener\("pageshow", \(\) => \{[\s\S]{0,180}?navigationInProgress = false;[\s\S]{0,180}?scheduleRouteSync\(\);/,
+  /window\.addEventListener\("pageshow", \(\) => \{[\s\S]{0,180}?finishNavigationLock\(\);/,
   "Scroll Miniplayer must recover its navigation lock after BFCache restore",
 );
-assert.match(
-  scrollMiniplayerSource,
-  /function syncRouteState\(\) \{[\s\S]+?if \(navigationInProgress\) \{[\s\S]+?return;\s+\}\s+if \(!isEligiblePath\(\)\) \{\s+stopMutationObservation\(\);[\s\S]+?return;\s+\}\s+startMutationObservation\(\);/,
-  "Scroll Miniplayer mutation observation must be limited to settled routes",
+const routeSyncIndex = scrollMiniplayerSource.indexOf(
+  "function syncRouteState()",
 );
+const navigationGuardIndex = scrollMiniplayerSource.indexOf(
+  "if (navigationInProgress)",
+  routeSyncIndex,
+);
+const ineligibleRouteIndex = scrollMiniplayerSource.indexOf(
+  "if (!isEligiblePath())",
+  navigationGuardIndex,
+);
+const stopObservationIndex = scrollMiniplayerSource.indexOf(
+  "stopMutationObservation();",
+  ineligibleRouteIndex,
+);
+const startObservationIndex = scrollMiniplayerSource.indexOf(
+  "startMutationObservation();",
+  stopObservationIndex,
+);
+assert(
+  routeSyncIndex !== -1 &&
+    navigationGuardIndex > routeSyncIndex &&
+    ineligibleRouteIndex > navigationGuardIndex &&
+    stopObservationIndex > ineligibleRouteIndex &&
+    startObservationIndex > stopObservationIndex,
+  "Scroll Miniplayer mutation observation must be limited to settled eligible routes",
+);
+const scrollMutationObserverIndex = scrollMiniplayerSource.indexOf(
+  "const mutationObserver = new MutationObserver((mutations) => {",
+);
+const mutationNavigationGuardIndex = scrollMiniplayerSource.indexOf(
+  "if (navigationInProgress || !isEligiblePath()) return;",
+  scrollMutationObserverIndex,
+);
+const mutationQueueWorkIndex = scrollMiniplayerSource.indexOf(
+  "const queuePanelTopologyChanged",
+  mutationNavigationGuardIndex,
+);
+assert(
+  scrollMutationObserverIndex !== -1 &&
+    mutationNavigationGuardIndex > scrollMutationObserverIndex &&
+    mutationQueueWorkIndex > mutationNavigationGuardIndex,
+  "Scroll Miniplayer queue mutation handling must remain inert during navigation",
+);
+for (const lifecycleRequirement of [
+  "function mutationChangesQueuePanelTopology(mutation)",
+  "...mutation.removedNodes",
+  "function getAuthoritativeReplacementPlayer()",
+  "if (!urlVideoId) return null;",
+  "if (replacementVideoId !== urlVideoId) return null;",
+  "function canDiscardOffRouteOrphan(player)",
+  'const PLAYER_RECOVERY_HOST_ID = "ytsmp-player-recovery-host"',
+  "function ensurePlayerRecoveryHost()",
+  "function startPlayerAdoptionObservation()",
+  "playerAdoptionObserverTarget === target",
+  "canDiscardOffRouteOrphan(candidate)",
+  "recoveryHost.appendChild(candidate);",
+  "scheduleOffRouteOrphanFinalisation();",
+]) {
+  assert(
+    scrollMiniplayerSource.includes(lifecycleRequirement),
+    `Missing Scroll Miniplayer lifecycle safeguard: ${lifecycleRequirement}`,
+  );
+}
 assert.match(
   scrollMiniplayerSource,
-  /const mutationObserver = new MutationObserver\(\(mutations\) => \{\s+if \(navigationInProgress \|\| !isEligiblePath\(\)\) return;/,
-  "Scroll Miniplayer mutation handling must remain inert during navigation",
+  /if \(\s*floatedPlayer === candidate[\s\S]{0,220}?canDiscardOffRouteOrphan\(candidate\)[\s\S]{0,120}?candidate\.remove\(\);/,
+  "Scroll Miniplayer may discard only a confirmed inactive off-route orphan",
 );
 assert(
   scrollMiniplayerSource.includes(
@@ -612,22 +850,109 @@ assert(
   scrollMiniplayerSource.includes("player?.getVideoData?.()?.video_id"),
   "Compact queue matching must consider the active player video ID",
 );
-const compactQueueFunctionIndex = scrollMiniplayerSource.indexOf(
-  "function getCompactQueueState()",
+for (const exactQueueRequirement of [
+  "function getCurrentVideoIds(player)",
+  "function getCurrentQueuePanel(currentVideoIds)",
+  "getQueueItemVideoId(item) === videoId",
+  "const currentVideoIds = getCurrentVideoIds(player);",
+  "const entry = getCurrentQueuePanel(currentVideoIds);",
+]) {
+  assert(
+    scrollMiniplayerSource.includes(exactQueueRequirement),
+    `Compact queue must retain exact current-video matching: ${exactQueueRequirement}`,
+  );
+}
+const queuePanelSelectionIndex = scrollMiniplayerSource.indexOf(
+  "function getCurrentQueuePanel(currentVideoIds)",
 );
-const exactQueueMatchIndex = scrollMiniplayerSource.indexOf(
-  "(item) => getQueueItemVideoId(item) === currentVideoId",
-  compactQueueFunctionIndex,
+const visibleExactPanelIndex = scrollMiniplayerSource.indexOf(
+  "if (visibleMatchedEntries.length)",
+  queuePanelSelectionIndex,
 );
-const selectedQueueMatchIndex = scrollMiniplayerSource.indexOf(
-  'item.hasAttribute("selected")',
-  compactQueueFunctionIndex,
+const anyExactPanelIndex = scrollMiniplayerSource.indexOf(
+  "if (matchedEntries.length)",
+  visibleExactPanelIndex,
+);
+const visibleFallbackPanelIndex = scrollMiniplayerSource.indexOf(
+  "if (visibleSelectedEntries.length === 1)",
+  anyExactPanelIndex,
+);
+const hiddenFallbackPanelIndex = scrollMiniplayerSource.indexOf(
+  "const hiddenSelectedEntries",
+  visibleFallbackPanelIndex,
 );
 assert(
-  compactQueueFunctionIndex !== -1 &&
-    exactQueueMatchIndex > compactQueueFunctionIndex &&
-    selectedQueueMatchIndex > exactQueueMatchIndex,
-  "Compact queue must prefer an exact URL/player video-ID match",
+  queuePanelSelectionIndex !== -1 &&
+    visibleExactPanelIndex > queuePanelSelectionIndex &&
+    anyExactPanelIndex > visibleExactPanelIndex &&
+    visibleFallbackPanelIndex > anyExactPanelIndex &&
+    hiddenFallbackPanelIndex > visibleFallbackPanelIndex,
+  "Compact queue panel priority must be visible exact, any exact, visible fallback, then sole hidden selected",
+);
+for (const cornerRequirement of [
+  'const CORNER_STORAGE_KEY = "yt-master-suite.scroll-miniplayer.corner.v1"',
+  'const VALID_CORNERS = Object.freeze([',
+  '"top-right"',
+  '"bottom-right"',
+  '"bottom-left"',
+  '"top-left"',
+  'const CLOSE_ICON_PATH =',
+  'const MOVE_ICON_PATH =',
+  'const CORNER_ICON_PATH =',
+  'const SVG_NAMESPACE = "http://www.w3.org/2000/svg"',
+  'function createControlIcon(className, pathData)',
+  'icon.setAttribute("aria-hidden", "true")',
+  'icon.setAttribute("focusable", "false")',
+  "function ensureCornerButton()",
+  "function renderCornerOptions(control)",
+  "function applyCornerSelection(corner, control)",
+  '.filter((corner) => corner !== currentCorner)',
+  'button.setAttribute("aria-controls", CORNER_MENU_ID)',
+  'button.setAttribute("aria-expanded", "false")',
+  'menu.setAttribute("role", "group")',
+  'setCornerMenuOpen(control, true);',
+  "persistCorner(currentCorner);",
+]) {
+  assert(
+    scrollMiniplayerSource.includes(cornerRequirement),
+    `Missing Scroll Miniplayer corner-control requirement: ${cornerRequirement}`,
+  );
+}
+assert(
+  !scrollMiniplayerSource.includes("CORNER_GLYPHS") &&
+    !scrollMiniplayerSource.includes('button.textContent = "x"') &&
+    !scrollMiniplayerSource.includes("getNextCorner") &&
+    !scrollMiniplayerSource.includes("currentCorner = getNextCorner(currentCorner)"),
+  "Scroll Miniplayer controls must use direct SVG corner choices instead of glyphs or cycling",
+);
+assert.match(
+  scrollMiniplayerSource,
+  /icon\.style\.transform = `rotate\(\$\{CORNER_ICON_ROTATIONS\[corner\]\}deg\)`/,
+  "Each corner option icon must point towards its direct destination",
+);
+assert.match(
+  scrollMiniplayerSource,
+  /function applyCornerSelection\(corner, control\) \{[\s\S]+?currentCorner = corner;[\s\S]+?persistCorner\(currentCorner\);[\s\S]+?renderCornerOptions\(control\);[\s\S]+?focus\(\{ preventScroll: true \}\);[\s\S]+?setCornerMenuOpen\(control, false\);[\s\S]+?setBodyBoxVars\(\);[\s\S]+?dispatchResize\(\);/,
+  "Direct corner selection must persist, retain focus, close the chooser and update the player position",
+);
+assert.match(
+  scrollMiniplayerSource,
+  /if \(event\.key !== "Escape"\) return;[\s\S]{0,220}?focus\(\{ preventScroll: true \}\);[\s\S]{0,120}?setCornerMenuOpen\(control, false\);/,
+  "Escape must return focus to Move before closing the corner chooser",
+);
+assert(
+  !scrollMiniplayerSource.includes(
+    '#${CORNER_CONTROL_ID}:focus-within #${CORNER_MENU_ID}',
+  ) &&
+    !scrollMiniplayerSource.includes(
+      '#${CORNER_CONTROL_ID}:hover #${CORNER_MENU_ID}',
+    ),
+  "CSS pseudo-classes must not override the corner chooser's explicit open state",
+);
+assert.match(
+  scrollMiniplayerSource,
+  /function readStoredCorner\(\) \{[\s\S]+?try \{[\s\S]+?localStorage\.getItem\(CORNER_STORAGE_KEY\)[\s\S]+?\} catch \{/,
+  "Scroll Miniplayer corner storage must fail safely",
 );
 
 const pageCoherenceSource = canonicalSources.get("pageCoherence") || "";
@@ -637,8 +962,27 @@ assert.match(
   "Page Coherence must ignore metadata events outside the active watch player",
 );
 
-const playerPreferencesSource =
-  canonicalSources.get("playerPreferencesLite") || "";
+for (const cardOwnershipRequirement of [
+  'const FILTER_REVEAL_ATTRIBUTE = "data-yt-master-show-filtered"',
+  "const CARD_HIDE_ATTRIBUTES = Object.freeze({",
+  "const closestMarkedCard = rootElement?.closest?.(markerSelector);",
+  'feedFilterProfiles: {',
+]) {
+  assert(
+    playerPreferencesSource.includes(cardOwnershipRequirement),
+    `Missing Player Preferences card-ownership requirement: ${cardOwnershipRequirement}`,
+  );
+}
+assert(
+  !playerPreferencesSource.includes("container.hidden ="),
+  "Player Preferences must not use the generic hidden property for shared feed cards",
+);
+assert(
+  !playerPreferencesSource.includes(
+    'container.style.setProperty("display", "none", "important")',
+  ),
+  "Player Preferences must not share inline display ownership with another module",
+);
 for (const layoutRefreshRequirement of [
   "const PLAYER_LAYOUT_REFRESH_DELAYS_MS = [0, 100, 500, 1200];",
   "const playerLayoutRefreshAttemptTimers = new Map();",
@@ -674,6 +1018,25 @@ assert(
     wheelPlayerLookupIndex > wheelFastRejectIndex,
   "Ordinary wheel events must be rejected before player DOM lookup",
 );
+assert.equal(
+  occurrences(
+    playerPreferencesSource,
+    'document.addEventListener("wheel", handleWheelVolume',
+  ),
+  1,
+  "The volume-wheel listener must be registered exactly once",
+);
+assert.match(
+  playerPreferencesSource,
+  /document\.addEventListener\("wheel", handleWheelVolume, \{\s+capture: true,\s+passive: false,\s+\}\);/,
+  "The volume-wheel listener must retain its known-working non-passive capture registration",
+);
+assert(
+  !playerPreferencesSource.includes("addWheelVolumeListener") &&
+    !playerPreferencesSource.includes("removeWheelVolumeListener") &&
+    !playerPreferencesSource.includes("wheelVolumeListenerInstalled"),
+  "Firefox right-button volume must not depend on temporary wheel-listener registration",
+);
 for (const selector of [
   "ytd-miniplayer",
   "ytd-playlist-panel-renderer",
@@ -704,6 +1067,38 @@ assert.match(
   userscript,
   /reportModuleError\(\s+observer\.ownerId,\s+"mutation observer callback",/,
   "Shared mutation callback errors must report their owning module",
+);
+for (const sharedObserverRequirement of [
+  'const RUNTIME_ERRORS_ATTRIBUTE = "data-yt-master-runtime-errors"',
+  "const MAX_RUNTIME_ERRORS = 20",
+  "function normaliseMutationOptions(options = {})",
+  "function setLogicalMutationRegistration(registrations, target, options)",
+  "function cloneLogicalMutationRegistrations(registrations)",
+  "function mutationMatchesRegistrations(",
+  "function buildMutationCoverage(activeObservers)",
+  "this.registrations = new Map();",
+  "setLogicalMutationRegistration(this.registrations, target, options);",
+  "clearLogicalMutationRegistrations(this.registrations);",
+  "nativeMutationObserver.takeRecords()",
+  "function preserveNativeMutationRecords(records)",
+  "function flushPreservedMutationBatches()",
+  "function mutationCoverageCovers(availableCoverage, requestedCoverage)",
+  '"mutation:preserved-dispatch"',
+]) {
+  assert(
+    userscript.includes(sharedObserverRequirement),
+    `Missing shared-observer hardening requirement: ${sharedObserverRequirement}`,
+  );
+}
+assert.match(
+  userscript,
+  /function dispatchMutations\(mutations\) \{[\s\S]{0,400}?flushPreservedMutationBatches\(\);[\s\S]{0,400}?dispatchMutationsWithDiagnostics\(mutations\)/,
+  "Preserved mutation records must be delivered before replacement-observer records",
+);
+assert.match(
+  userscript,
+  /function recordRuntimeError\(ownerId, operation, error\) \{[\s\S]+?if \(runtimeErrors\.length > MAX_RUNTIME_ERRORS\)/,
+  "Runtime error reporting must remain bounded",
 );
 assert(
   userscript.includes("globalThis.__YT_MASTER_DIAGNOSTICS__"),
@@ -768,11 +1163,19 @@ for (const coherenceRequirement of [
   'const STALE_ATTRIBUTE = "data-yt-master-page-stale"',
   'const STATE_ATTRIBUTE = "data-yt-master-state"',
   'const EVENTS_ATTRIBUTE = "data-yt-master-events"',
+  'const QUEUE_BACKUP_KEY = "yt-master-page-coherence-queue-backup-v1"',
   "urlVideoId === playerVideoId",
   "flexyVideoId !== playerVideoId",
   "mismatchesBeforeWarning: 2",
-  'button.textContent = "Reload page data"',
-  "button.addEventListener(\"click\", () => location.reload())",
+  'copyQueueButton.textContent = "Copy queue"',
+  'copyDiagnosticsButton.textContent = "Copy diagnostics"',
+  'reloadButton.textContent = "Reload page data"',
+  'message.setAttribute("aria-live", "polite")',
+  'message.setAttribute("aria-atomic", "true")',
+  "const backedUp = storeQueueBackup(queue)",
+  "setTimeout(() => location.reload(), 50)",
+  "delete safeState.commentVideoIds",
+  'runtimeErrors: readJsonAttribute("data-yt-master-runtime-errors")',
   "globalThis.__YT_MASTER_STATE__",
 ]) {
   assert(

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Watch Layout Cleaner
 // @namespace    Citizen.youtube.watch-layout-cleaner
-// @version      1.25
+// @version      1.26
 // @description  Expands YouTube watch pages, keeps the right rail fixed at SponsorBlock-friendly width, and widens metadata/comments.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-watch-layout-cleaner
@@ -24,7 +24,11 @@
   };
 
   const STYLE_ID = "tm-youtube-watch-layout-cleaner";
-  const PLAYLIST_PANEL_SELECTOR = "ytd-playlist-panel-renderer";
+  const PLAYLIST_PANEL_SELECTORS = [
+    "ytd-playlist-panel-renderer",
+    "yt-playlist-panel-renderer",
+  ];
+  const PLAYLIST_PANEL_SELECTOR = PLAYLIST_PANEL_SELECTORS.join(",");
   const QUEUE_THUMBNAIL_FALLBACK_DELAYS_MS = [750, 1500];
   const QUEUE_ITEM_SELECTOR = [
     "ytd-playlist-panel-video-renderer",
@@ -41,6 +45,49 @@
   const QUEUE_THUMBNAIL_FALLBACK_CSS_PROPERTY =
     "--ywlc-thumbnail-fallback-image";
   const QUEUE_THUMBNAIL_FALLBACK_ROOT_MARGIN = "200px 0px";
+  const QUEUE_THUMBNAIL_FALLBACK_STYLE_SELECTOR = PLAYLIST_PANEL_SELECTORS.map(
+    (panelSelector) =>
+      `${panelSelector} [${QUEUE_THUMBNAIL_FALLBACK_ATTRIBUTE}="1"]`,
+  ).join(",\n");
+  const EMPTY_SECONDARY_RAIL_ATTRIBUTE = "data-ywlc-empty-secondary-rail";
+  const CHAT_SURFACE_SELECTOR = [
+    "ytd-live-chat-frame#chat",
+    'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-live-chat"]',
+    "ytd-engagement-panel-section-list-renderer:has(yt-live-chat-app)",
+  ].join(",");
+  const RAIL_MUTATION_TARGET_SELECTOR = [
+    PLAYLIST_PANEL_SELECTOR,
+    CHAT_SURFACE_SELECTOR,
+    "#chat-container",
+    "#panels",
+    "#related",
+    "#secondary",
+    "#secondary-inner",
+  ].join(",");
+  const QUEUE_ITEM_MUTATION_ATTRIBUTES = [
+    "aria-current",
+    "aria-selected",
+    "href",
+    "selected",
+    "src",
+  ];
+  const SURFACE_STATE_MUTATION_ATTRIBUTES = [
+    "aria-current",
+    "aria-hidden",
+    "aria-selected",
+    "class",
+    "collapsed",
+    "hidden",
+    "selected",
+    "style",
+  ];
+  const DISCOVERY_MUTATION_ATTRIBUTES = [
+    ...new Set([
+      ...QUEUE_ITEM_MUTATION_ATTRIBUTES,
+      ...SURFACE_STATE_MUTATION_ATTRIBUTES,
+    ]),
+  ];
+  const PANEL_MUTATION_ATTRIBUTES = DISCOVERY_MUTATION_ATTRIBUTES;
   const WATCH_FLEXY_SELECTORS = [
     "ytd-watch-flexy[flexy]",
     "ytd-watch-flexy[flexy_]",
@@ -51,16 +98,23 @@
     "ytd-watch-flexy[is-watch-wide]",
   ];
   const WATCH_FLEXY_SELECTOR = WATCH_FLEXY_SELECTORS.join(",\n");
-  const TWO_COLUMN_WATCH_FLEXY_SELECTOR = [
+  const TWO_COLUMN_WATCH_FLEXY_SELECTORS = [
     "ytd-watch-flexy[is-two-columns]",
     "ytd-watch-flexy[is-two-columns_]",
-  ].join(",\n");
-  const COLLAPSED_CHAT_WITHOUT_QUEUE_SELECTOR = [
-    "ytd-watch-flexy[is-two-columns]:has(ytd-live-chat-frame#chat[collapsed]):not(:has(ytd-playlist-panel-renderer))",
-    "ytd-watch-flexy[is-two-columns_]:has(ytd-live-chat-frame#chat[collapsed]):not(:has(ytd-playlist-panel-renderer))",
-  ].join(",\n");
+  ];
+  const TWO_COLUMN_WATCH_FLEXY_SELECTOR =
+    TWO_COLUMN_WATCH_FLEXY_SELECTORS.join(",\n");
+  const EMPTY_SECONDARY_RAIL_SELECTOR =
+    TWO_COLUMN_WATCH_FLEXY_SELECTORS.map(
+      (watchSelector) =>
+        `${watchSelector}[${EMPTY_SECONDARY_RAIL_ATTRIBUTE}="1"]`,
+    ).join(",\n");
   let queueThumbnailFallbackTimers = [];
   let queueThumbnailFallbackObserver = null;
+  let observedRailMutationTargets = new Set();
+  let queueThumbnailMutationFrame = 0;
+  let railStateReconciliationFrame = 0;
+  const pendingQueueThumbnailItems = new Set();
 
   function px(value) {
     return `${value}px`;
@@ -88,9 +142,9 @@ ${WATCH_FLEXY_SELECTOR}{
   }
 }
 
-/* At half-screen, a collapsed chat must not leave an empty sidebar behind. */
-@media (min-width: ${px(CONFIG.queueLayoutBreakpointPx + 1)}) and (max-width: ${px(CONFIG.relatedVideosHideBreakpointPx)}) {
-  ${COLLAPSED_CHAT_WITHOUT_QUEUE_SELECTOR}{
+/* Collapse only a rail confirmed empty by the live DOM-state reconciliation. */
+@media (min-width: ${px(CONFIG.queueLayoutBreakpointPx + 1)}) {
+  ${EMPTY_SECONDARY_RAIL_SELECTOR}{
     --ytd-watch-flexy-sidebar-width: 0px !important;
   }
 }
@@ -129,7 +183,7 @@ ytd-comments ytd-comment-thread-renderer {
   max-width: 100% !important;
 }
 
-ytd-playlist-panel-renderer [${QUEUE_THUMBNAIL_FALLBACK_ATTRIBUTE}="1"] {
+${QUEUE_THUMBNAIL_FALLBACK_STYLE_SELECTOR} {
   background-image: var(${QUEUE_THUMBNAIL_FALLBACK_CSS_PROPERTY}) !important;
   background-position: center !important;
   background-repeat: no-repeat !important;
@@ -259,11 +313,301 @@ ytd-playlist-panel-renderer [${QUEUE_THUMBNAIL_FALLBACK_ATTRIBUTE}="1"] {
     return queueThumbnailFallbackObserver;
   }
 
-  function applyQueueThumbnailFallbacks() {
+  function addQueueItemsFromNode(items, node) {
+    const element =
+      node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+    if (!element) return;
+
+    const closestItem = element.closest?.(QUEUE_ITEM_SELECTOR);
+    if (closestItem?.closest(PLAYLIST_PANEL_SELECTOR)) {
+      items.add(closestItem);
+    }
+    element.querySelectorAll?.(QUEUE_ITEM_SELECTOR).forEach((item) => {
+      if (item.closest(PLAYLIST_PANEL_SELECTOR)) items.add(item);
+    });
+  }
+
+  function flushPendingQueueThumbnailItems() {
+    queueThumbnailMutationFrame = 0;
+    const items = Array.from(pendingQueueThumbnailItems);
+    pendingQueueThumbnailItems.clear();
     if (!isWatchPath()) return;
 
     const observer = getQueueThumbnailFallbackObserver();
-    document.querySelectorAll(PLAYLIST_PANEL_SELECTOR).forEach((panel) => {
+    items.forEach((item) => {
+      if (!item.isConnected || !item.closest(PLAYLIST_PANEL_SELECTOR)) return;
+      if (observer) {
+        observer.observe(item);
+      } else {
+        applyQueueThumbnailFallback(item);
+      }
+    });
+  }
+
+  function scheduleQueueThumbnailItems(items) {
+    items.forEach((item) => pendingQueueThumbnailItems.add(item));
+    if (!pendingQueueThumbnailItems.size || queueThumbnailMutationFrame) return;
+
+    queueThumbnailMutationFrame = requestAnimationFrame(
+      flushPendingQueueThumbnailItems,
+    );
+  }
+
+  function canRenderSurface(element) {
+    if (
+      !element?.isConnected ||
+      element.hidden ||
+      element.getAttribute("aria-hidden") === "true"
+    ) {
+      return false;
+    }
+
+    const style = getComputedStyle(element);
+    return style.display !== "none" && !["hidden", "collapse"].includes(
+      style.visibility,
+    );
+  }
+
+  function isElementOrAncestorHidden(element, boundary) {
+    if (!element?.isConnected) return true;
+
+    let current = element;
+    while (current) {
+      if (!canRenderSurface(current)) return true;
+      if (current === boundary) return false;
+      current = current.parentElement;
+    }
+    return true;
+  }
+
+  function isActiveChatSurface(surface) {
+    return (
+      !surface.hasAttribute("collapsed") &&
+      !isElementOrAncestorHidden(surface, surface.closest("ytd-watch-flexy"))
+    );
+  }
+
+  function isActiveQueuePanel(panel) {
+    return (
+      Boolean(panel.querySelector(QUEUE_ITEM_SELECTOR)) &&
+      !isElementOrAncestorHidden(panel, panel.closest("ytd-watch-flexy"))
+    );
+  }
+
+  function reconcileSecondaryRailState() {
+    railStateReconciliationFrame = 0;
+    document.querySelectorAll("ytd-watch-flexy").forEach((watchFlexy) => {
+      const eligible =
+        isWatchPath() && watchFlexy.matches(TWO_COLUMN_WATCH_FLEXY_SELECTOR);
+      const related = eligible ? watchFlexy.querySelector("#related") : null;
+      const relatedHidden =
+        eligible &&
+        (!related || isElementOrAncestorHidden(related, watchFlexy));
+      const chatVisible =
+        eligible &&
+        Array.from(watchFlexy.querySelectorAll(CHAT_SURFACE_SELECTOR)).some(
+          isActiveChatSurface,
+        );
+      const queueVisible =
+        eligible &&
+        Array.from(
+          watchFlexy.querySelectorAll(PLAYLIST_PANEL_SELECTOR),
+        ).some(isActiveQueuePanel);
+      const railIsEmpty =
+        eligible && relatedHidden && !chatVisible && !queueVisible;
+
+      if (railIsEmpty) {
+        watchFlexy.setAttribute(EMPTY_SECONDARY_RAIL_ATTRIBUTE, "1");
+      } else {
+        watchFlexy.removeAttribute(EMPTY_SECONDARY_RAIL_ATTRIBUTE);
+      }
+    });
+  }
+
+  function scheduleSecondaryRailStateReconciliation() {
+    if (railStateReconciliationFrame) return;
+    railStateReconciliationFrame = requestAnimationFrame(
+      reconcileSecondaryRailState,
+    );
+  }
+
+  function getRailMutationTargets() {
+    if (!isWatchPath()) return [];
+
+    const targets = new Set();
+    document.querySelectorAll("ytd-watch-flexy").forEach((watchFlexy) => {
+      watchFlexy
+        .querySelectorAll(RAIL_MUTATION_TARGET_SELECTOR)
+        .forEach((target) => targets.add(target));
+      const secondary = watchFlexy.querySelector("#secondary");
+      targets.add(secondary || watchFlexy);
+      if (secondary?.parentElement) {
+        targets.add(secondary.parentElement);
+      }
+    });
+    return Array.from(targets);
+  }
+
+  function getNodeElement(node) {
+    return node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+  }
+
+  function nodeContainsRailMutationTarget(node) {
+    const element = getNodeElement(node);
+    return Boolean(
+      element &&
+        (element.matches(RAIL_MUTATION_TARGET_SELECTOR) ||
+          element.querySelector(RAIL_MUTATION_TARGET_SELECTOR)),
+    );
+  }
+
+  function nodeContainsQueueItem(node) {
+    const element = getNodeElement(node);
+    return Boolean(
+      element &&
+        (element.matches(QUEUE_ITEM_SELECTOR) ||
+          element.querySelector(QUEUE_ITEM_SELECTOR)),
+    );
+  }
+
+  function isDiscoveryMutationTarget(target) {
+    return target.matches("ytd-watch-flexy, #secondary");
+  }
+
+  function isSecondaryRailMutationAnchor(target) {
+    return Array.from(target.children || []).some(
+      (child) =>
+        child.matches?.("#secondary") &&
+        child.closest("ytd-watch-flexy") === target.closest("ytd-watch-flexy"),
+    );
+  }
+
+  function mutationAffectsRailState(mutation) {
+    const element = getNodeElement(mutation.target);
+    if (!element) return false;
+
+    if (mutation.type === "attributes") {
+      if (
+        ["aria-current", "aria-selected", "selected"].includes(
+          mutation.attributeName,
+        ) &&
+        element.closest(QUEUE_ITEM_SELECTOR)
+      ) {
+        return true;
+      }
+      return (
+        SURFACE_STATE_MUTATION_ATTRIBUTES.includes(mutation.attributeName) &&
+        (element.matches(RAIL_MUTATION_TARGET_SELECTOR) ||
+          isDiscoveryMutationTarget(element))
+      );
+    }
+
+    if (mutation.type !== "childList") return false;
+    const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
+    if (element.closest(`${CHAT_SURFACE_SELECTOR}, #chat-container`)) {
+      return true;
+    }
+    if (element.closest(PLAYLIST_PANEL_SELECTOR)) {
+      return changedNodes.some(nodeContainsQueueItem);
+    }
+    return changedNodes.some(
+      (node) =>
+        nodeContainsRailMutationTarget(node) || nodeContainsQueueItem(node),
+    );
+  }
+
+  function refreshRailMutationObserver() {
+    const nextTargets = new Set(getRailMutationTargets());
+    if (
+      nextTargets.size === observedRailMutationTargets.size &&
+      [...nextTargets].every((target) =>
+        observedRailMutationTargets.has(target),
+      )
+    ) {
+      return;
+    }
+
+    railMutationObserver.disconnect();
+    observedRailMutationTargets = nextTargets;
+    observedRailMutationTargets.forEach((target) => {
+      const isSecondaryRailAnchor =
+        isSecondaryRailMutationAnchor(target);
+      const isDiscoveryTarget = isDiscoveryMutationTarget(target);
+      const isPlaylistPanel = target.matches(PLAYLIST_PANEL_SELECTOR);
+      railMutationObserver.observe(
+        target,
+        isSecondaryRailAnchor
+          ? {
+              childList: true,
+            }
+          : isDiscoveryTarget
+          ? {
+              attributeFilter: DISCOVERY_MUTATION_ATTRIBUTES,
+              attributes: true,
+              childList: true,
+              subtree: true,
+            }
+          : isPlaylistPanel
+          ? {
+              attributeFilter: PANEL_MUTATION_ATTRIBUTES,
+              attributes: true,
+              childList: true,
+              subtree: true,
+            }
+          : {
+              attributeFilter: SURFACE_STATE_MUTATION_ATTRIBUTES,
+              attributes: true,
+              childList: target.matches(
+                "#chat-container, ytd-engagement-panel-section-list-renderer",
+              ),
+            },
+      );
+    });
+  }
+
+  const railMutationObserver = new MutationObserver((mutations) => {
+    if (!isWatchPath()) return;
+
+    const items = new Set();
+    let railStateMayHaveChanged = false;
+    let targetsMayHaveChanged = false;
+    mutations.forEach((mutation) => {
+      railStateMayHaveChanged ||= mutationAffectsRailState(mutation);
+      if (mutation.type === "attributes") {
+        if (QUEUE_ITEM_MUTATION_ATTRIBUTES.includes(mutation.attributeName)) {
+          addQueueItemsFromNode(items, mutation.target);
+        }
+        return;
+      }
+      if (mutation.type !== "childList") return;
+
+      addQueueItemsFromNode(items, mutation.target);
+      mutation.addedNodes?.forEach((node) => addQueueItemsFromNode(items, node));
+      targetsMayHaveChanged ||=
+        Array.from(mutation.addedNodes || []).some(
+          nodeContainsRailMutationTarget,
+        ) ||
+        Array.from(mutation.removedNodes || []).some(
+          nodeContainsRailMutationTarget,
+        );
+    });
+    scheduleQueueThumbnailItems(items);
+    if (railStateMayHaveChanged) {
+      scheduleSecondaryRailStateReconciliation();
+    }
+    if (targetsMayHaveChanged) refreshRailMutationObserver();
+  });
+
+  function applyQueueThumbnailFallbacks() {
+    const panels = isWatchPath()
+      ? Array.from(document.querySelectorAll(PLAYLIST_PANEL_SELECTOR))
+      : [];
+    refreshRailMutationObserver();
+    scheduleSecondaryRailStateReconciliation();
+    if (!panels.length) return;
+
+    const observer = getQueueThumbnailFallbackObserver();
+    panels.forEach((panel) => {
       panel.querySelectorAll(QUEUE_ITEM_SELECTOR).forEach((item) => {
         if (observer) {
           observer.observe(item);
@@ -280,6 +624,8 @@ ytd-playlist-panel-renderer [${QUEUE_THUMBNAIL_FALLBACK_ATTRIBUTE}="1"] {
       queueThumbnailFallbackObserver.takeRecords();
     }
     queueThumbnailFallbackTimers.forEach((timerId) => clearTimeout(timerId));
+    refreshRailMutationObserver();
+    scheduleSecondaryRailStateReconciliation();
     queueThumbnailFallbackTimers = QUEUE_THUMBNAIL_FALLBACK_DELAYS_MS.map(
       (delay) => setTimeout(applyQueueThumbnailFallbacks, delay),
     );
@@ -294,6 +640,13 @@ ytd-playlist-panel-renderer [${QUEUE_THUMBNAIL_FALLBACK_ATTRIBUTE}="1"] {
   narrowLayoutMediaQuery.addEventListener(
     "change",
     scheduleQueueThumbnailFallbacks,
+  );
+  const relatedVideosMediaQuery = matchMedia(
+    `(max-width: ${px(CONFIG.relatedVideosHideBreakpointPx)})`,
+  );
+  relatedVideosMediaQuery.addEventListener(
+    "change",
+    scheduleSecondaryRailStateReconciliation,
   );
 
   // YouTube is an SPA; re-apply after in-site navigation
