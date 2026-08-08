@@ -912,6 +912,10 @@ for (const cornerRequirement of [
   'menu.setAttribute("role", "group")',
   'setCornerMenuOpen(control, true);',
   "persistCorner(currentCorner);",
+  'window.addEventListener("storage", (event) => {',
+  "event.key !== CORNER_STORAGE_KEY",
+  "!isValidCorner(event.newValue)",
+  "currentCorner = event.newValue;",
 ]) {
   assert(
     scrollMiniplayerSource.includes(cornerRequirement),
@@ -1163,20 +1167,14 @@ for (const coherenceRequirement of [
   'const STALE_ATTRIBUTE = "data-yt-master-page-stale"',
   'const STATE_ATTRIBUTE = "data-yt-master-state"',
   'const EVENTS_ATTRIBUTE = "data-yt-master-events"',
-  'const QUEUE_BACKUP_KEY = "yt-master-page-coherence-queue-backup-v1"',
   "urlVideoId === playerVideoId",
   "flexyVideoId !== playerVideoId",
   "mismatchesBeforeWarning: 2",
-  'copyQueueButton.textContent = "Copy queue"',
-  'copyDiagnosticsButton.textContent = "Copy diagnostics"',
-  'reloadButton.textContent = "Reload page data"',
-  'message.setAttribute("aria-live", "polite")',
-  'message.setAttribute("aria-atomic", "true")',
-  "const backedUp = storeQueueBackup(queue)",
-  "setTimeout(() => location.reload(), 50)",
-  "delete safeState.commentVideoIds",
-  'runtimeErrors: readJsonAttribute("data-yt-master-runtime-errors")',
+  'const LEGACY_NOTICE_ID = "yt-master-page-coherence-notice"',
+  "removeLegacyNotice();",
   "globalThis.__YT_MASTER_STATE__",
+  '"visibilitychange",',
+  'document.visibilityState === "visible"',
 ]) {
   assert(
     userscript.includes(coherenceRequirement),
@@ -1185,9 +1183,53 @@ for (const coherenceRequirement of [
 }
 assert.match(
   userscript,
-  /:root\[\$\{STALE_ATTRIBUTE\}\] ytd-watch-metadata,[\s\S]+?:root\[\$\{STALE_ATTRIBUTE\}\] ytd-comments/,
-  "Confirmed stale metadata and comments must remain hidden",
+  /:root\[\$\{STALE_ATTRIBUTE\}\] ytd-watch-metadata h1,[\s\S]+?:root\[\$\{STALE_ATTRIBUTE\}\] ytd-comments/,
+  "Confirmed stale identity content and comments must remain hidden",
 );
+for (const staleContentSelector of [
+  ":root[${STALE_ATTRIBUTE}] ytd-watch-metadata h1,",
+  ":root[${STALE_ATTRIBUTE}] ytd-watch-metadata #owner,",
+  ":root[${STALE_ATTRIBUTE}] ytd-watch-metadata #bottom-row,",
+  ":root[${STALE_ATTRIBUTE}] ytd-video-primary-info-renderer h1,",
+  ":root[${STALE_ATTRIBUTE}] ytd-video-primary-info-renderer #info-text,",
+  ":root[${STALE_ATTRIBUTE}] ytd-video-secondary-info-renderer {",
+  ":root[${STALE_ATTRIBUTE}] ytd-comments {",
+]) {
+  assert(
+    userscript.includes(staleContentSelector),
+    `Missing targeted page-coherence selector: ${staleContentSelector}`,
+  );
+}
+assert.doesNotMatch(
+  userscript,
+  /:root\[\$\{STALE_ATTRIBUTE\}\] ytd-watch-metadata,\s*\n/,
+  "Page Coherence must not hide the metadata component containing native actions",
+);
+assert.doesNotMatch(
+  userscript,
+  /:root\[\$\{STALE_ATTRIBUTE\}\] ytd-video-primary-info-renderer,\s*\n/,
+  "Page Coherence must not hide the legacy primary-info action component",
+);
+assert.doesNotMatch(
+  userscript,
+  /:root\[\$\{STALE_ATTRIBUTE\}\][^\n{]*#actions/,
+  "Page Coherence must not hide YouTube's native action row",
+);
+for (const removedCoherenceUi of [
+  'copyQueueButton.textContent = "Copy queue"',
+  'copyDiagnosticsButton.textContent = "Copy diagnostics"',
+  'reloadButton.textContent = "Reload page data"',
+  "const ensureNotice =",
+  "const captureQueue =",
+  "const buildDiagnosticsExport =",
+  "yt-master-page-coherence-actions",
+  "yt-master-page-coherence-queue-backup-v1",
+]) {
+  assert(
+    !userscript.includes(removedCoherenceUi),
+    `Removed page-coherence UI is still present: ${removedCoherenceUi}`,
+  );
+}
 
 const userscriptHash = createHash("sha256").update(userscript).digest("hex");
 assert.equal(releaseManifest.schemaVersion, 1);

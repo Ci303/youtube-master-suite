@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         YouTube Scroll Miniplayer
 // @namespace    Citizen.youtube.scroll-miniplayer
-// @version      5.16
-// @description  Floats the active YouTube player with compact queue context and YouTube-style close and direct corner-selection controls.
+// @version      5.17
+// @description  Floats the active YouTube player with compact queue context, YouTube-style controls, and synchronised corner selection across open windows.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-scroll-miniplayer
 // @supportURL   https://github.com/Ci303/youtube-scroll-miniplayer/issues
@@ -1858,6 +1858,27 @@
   }, { passive: true });
 
   window.addEventListener("scroll", scheduleScrollSync, { passive: true });
+
+  window.addEventListener("storage", (event) => {
+    if (
+      event.key !== CORNER_STORAGE_KEY ||
+      !isValidCorner(event.newValue) ||
+      event.newValue === currentCorner
+    ) {
+      return;
+    }
+
+    currentCorner = event.newValue;
+    const control = document.getElementById(CORNER_CONTROL_ID);
+    updateCornerButton();
+    renderCornerOptions(control);
+    setCornerMenuOpen(control, false);
+
+    if (isBodyFloating()) {
+      setBodyBoxVars();
+      dispatchResize();
+    }
+  });
 
   document.addEventListener("fullscreenchange", () => {
     if (isFullscreen()) setActive(false);

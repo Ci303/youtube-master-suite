@@ -18,9 +18,9 @@ or install it.
 | Comment Cleaner | 1.15 | Hides comment engagement and composer clutter, prevents stale comments from appearing after queue navigation, compacts spacing, and distinguishes uploader and commenter names. Legacy and current comment components receive the same control, spacing and badge treatment. Uploader-link cache changes and comment freshness checks are batched per mutation delivery. |
 | Feed UI Cleaner | 2.5 | Removes unwanted feed shelves, chips, advertisements, mixes, members-only cards, podcasts, and resulting gaps while preserving YouTube search. Filtering is route-profiled, reconciles recycled cards, targets the nearest genuine card rather than an enclosing shelf, and provides a temporary `Filtered: N` reveal control without counting or exposing advertisements. |
 | Miniplayer Button Restorer | 1.4 | Restores the native-style miniplayer control when YouTube omits it, uses the current player for its fast path and native fallback, and recovers after a back/forward-cache restore. |
-| Page Coherence Guard | 1.2 | Detects incomplete queue navigation, hides confirmed stale metadata and comments, and publishes lightweight identity diagnostics. Its warning can copy a bounded support report or the current queue, stores a tab-scoped queue backup before an explicit reload, and never reloads or restores a queue automatically. Metadata events from feed previews and inactive videos are ignored. |
+| Page Coherence Guard | 1.4 | Detects incomplete queue navigation, hides confirmed stale title, owner, description and comment content, preserves YouTube's native action controls, and publishes lightweight identity diagnostics. Metadata events from feed previews and inactive videos are ignored, while a restored foreground page receives a deduplicated coherence recheck. |
 | Player Preferences Lite | 1.39 | Applies player, feed, description, live-chat, volume, quality, Shorts, and watch-page preferences without taking over YouTube's queue or native miniplayer. Hides both legacy and current grid-model Shorts shelves, including search results, while leaving ordinary result cards and search filter chips untouched; converted Shorts links retain an ID-scoped marker that is cleared when YouTube recycles the card. Keeps native like and Return YouTube Dislike counts vertically aligned. Feed filters use route profiles and module-owned markers; watched-video filtering deliberately excludes Watch History. Expanded descriptions remain responsive without repeated fixed-height writes, and live-chat hiding targets only chat surfaces rather than shared panel containers. Info cards, recommendation tiles, and the single autoplay up-next card have independent settings; individual end-screen recommendation tiles are visually hidden without removing YouTube's native autoplay geometry from layout. Layout refresh retries are coalesced. The known-working volume listener remains registered, while ordinary wheel events are rejected before player lookup unless the configured right-button gesture is active. |
-| Scroll Miniplayer | 5.16 | Floats the active watch or live player when it leaves the viewport and shows compact current-title and queue-position context while the full queue remains hidden. YouTube-style SVG controls close it or open a direct three-corner position chooser while preserving accessible labels, keyboard focus and the stored valid position. Queue context follows panel creation, removal and selection changes, preferring an exact current-video match before safe visible or selected fallbacks. Navigation and player restoration use bounded recovery and non-destructive adoption paths, and observation stops off eligible routes. |
+| Scroll Miniplayer | 5.17 | Floats the active watch or live player when it leaves the viewport and shows compact current-title and queue-position context while the full queue remains hidden. YouTube-style SVG controls close it or open a direct three-corner position chooser while preserving accessible labels, keyboard focus and the stored valid position; corner changes synchronise across already-open YouTube windows. Queue context follows panel creation, removal and selection changes, preferring an exact current-video match before safe visible or selected fallbacks. Navigation and player restoration use bounded recovery and non-destructive adoption paths, and observation stops off eligible routes. |
 | Watch Layout Cleaner | 1.26 | Expands watch-page content, keeps an active queue rail at the SponsorBlock-friendly `374px` width, widens metadata and comments, and provides late-loading queue-thumbnail fallbacks for both legacy and current playlist panels. It releases an otherwise empty rail only when related content and chat are hidden and no usable queue exists. |
 
 The former standalone SponsorBlock Queue Width script remains superseded. Its
@@ -203,19 +203,11 @@ __YT_MASTER_STATE__.check()
 ```
 
 After two persistent checks confirm that the URL and player have advanced but
-`ytd-watch-flexy` still belongs to the previous video, stale metadata and
-comments are hidden. The warning provides three explicit actions:
-
-- `Copy queue` copies the ordered queue and stores a bounded, versioned backup
-  in this tab's `sessionStorage`.
-- `Copy diagnostics` copies the health marker, bounded runtime errors, current
-  coherence state and the last 20 navigation events, excluding comment IDs.
-- `Reload page data` first attempts the same tab-scoped queue backup and then
-  reloads.
-
-The suite never reloads automatically and never automatically restores or
-replays a queue. The backup is recovery evidence only, avoiding duplicate or
-unexpected playback changes.
+`ytd-watch-flexy` still belongs to the previous video, stale title, owner,
+description and comment content is hidden. YouTube's native action row remains
+available, including like, dislike, Save/queue and overflow controls. The guard
+continues to publish its bounded diagnostic state without adding a replacement
+warning or action bar to the page.
 
 ### Scroll-miniplayer position
 
@@ -356,8 +348,8 @@ Before publishing a new version:
 4. Confirm the route-policy checks cover any new exclusions.
 5. Test YouTube Home, Search, History and subscription feeds; filtered-card
    reveal/reset and recycled cards; watch-page SPA navigation;
-   comment/video-ID parity during queue changes; coherence queue/diagnostic
-   copying; the restored miniplayer button; all four scroll-miniplayer corners;
+   comment/video-ID parity during queue changes; coherence stale-content and
+   native-action behaviour; the restored miniplayer button; all four scroll-miniplayer corners;
    fullscreen transitions; live pages; and the `374px` SponsorBlock queue.
 6. Commit and push, then run `node .\verify-master.mjs --release`.
 7. Confirm the installed Tampermonkey source matches
