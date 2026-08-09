@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MASTER_VERSION = "0.1.30";
+const MASTER_VERSION = "0.1.31";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const outputPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const releaseManifestPath = join(suiteDirectory, "release-manifest.json");
@@ -167,6 +167,18 @@ function setLogicalMutationRegistration(registrations, target, options) {
 
 function clearLogicalMutationRegistrations(registrations) {
   registrations.clear();
+}
+
+function setSharedMutationObserverRegistryState(
+  observers,
+  observer,
+  active,
+) {
+  if (active) {
+    observers.add(observer);
+  } else {
+    observers.delete(observer);
+  }
 }
 
 function cloneLogicalMutationRegistrations(registrations) {
@@ -843,6 +855,47 @@ function runTransformSelfTests() {
     throw new Error("Mutation registration disconnect self-test failed");
   }
 
+  const observerRegistry = new Set();
+  const logicalObserver = {};
+  setSharedMutationObserverRegistryState(
+    observerRegistry,
+    logicalObserver,
+    true,
+  );
+  if (
+    observerRegistry.size !== 1 ||
+    !observerRegistry.has(logicalObserver)
+  ) {
+    throw new Error("Mutation observer registration self-test failed");
+  }
+  setSharedMutationObserverRegistryState(
+    observerRegistry,
+    logicalObserver,
+    false,
+  );
+  if (observerRegistry.size || observerRegistry.has(logicalObserver)) {
+    throw new Error("Mutation observer release self-test failed");
+  }
+  setSharedMutationObserverRegistryState(
+    observerRegistry,
+    logicalObserver,
+    true,
+  );
+  if (
+    observerRegistry.size !== 1 ||
+    !observerRegistry.has(logicalObserver)
+  ) {
+    throw new Error("Mutation observer re-registration self-test failed");
+  }
+  setSharedMutationObserverRegistryState(
+    observerRegistry,
+    logicalObserver,
+    false,
+  );
+  if (observerRegistry.size || observerRegistry.has(logicalObserver)) {
+    throw new Error("Mutation observer final release self-test failed");
+  }
+
   const impliedAttributeOptions = normaliseMutationOptions({
     attributeFilter: ["class"],
   });
@@ -932,6 +985,7 @@ const runtimeMutationCoverageHelpers = [
   normaliseMutationOptions,
   setLogicalMutationRegistration,
   clearLogicalMutationRegistrations,
+  setSharedMutationObserverRegistryState,
   cloneLogicalMutationRegistrations,
   mutationMatchesRegistrations,
   buildMutationCoverage,
@@ -1460,7 +1514,6 @@ ${runtimeMutationCoverageHelpers}
       this.registrations = new Map();
       this.active = false;
       this.generation = 0;
-      sharedMutationObservers.add(this);
     }
 
     observe(target, options) {
@@ -1468,6 +1521,11 @@ ${runtimeMutationCoverageHelpers}
       setLogicalMutationRegistration(this.registrations, target, options);
       if (!wasActive) this.generation += 1;
       this.active = true;
+      setSharedMutationObserverRegistryState(
+        sharedMutationObservers,
+        this,
+        true,
+      );
       requestMutationRefresh();
     }
 
@@ -1476,6 +1534,11 @@ ${runtimeMutationCoverageHelpers}
       clearLogicalMutationRegistrations(this.registrations);
       this.active = false;
       this.generation += 1;
+      setSharedMutationObserverRegistryState(
+        sharedMutationObservers,
+        this,
+        false,
+      );
       requestMutationRefresh();
     }
 

@@ -1077,12 +1077,15 @@ for (const sharedObserverRequirement of [
   "const MAX_RUNTIME_ERRORS = 20",
   "function normaliseMutationOptions(options = {})",
   "function setLogicalMutationRegistration(registrations, target, options)",
+  "function setSharedMutationObserverRegistryState(",
   "function cloneLogicalMutationRegistrations(registrations)",
   "function mutationMatchesRegistrations(",
   "function buildMutationCoverage(activeObservers)",
   "this.registrations = new Map();",
   "setLogicalMutationRegistration(this.registrations, target, options);",
+  "setSharedMutationObserverRegistryState(\n        sharedMutationObservers,\n        this,\n        true,",
   "clearLogicalMutationRegistrations(this.registrations);",
+  "setSharedMutationObserverRegistryState(\n        sharedMutationObservers,\n        this,\n        false,",
   "nativeMutationObserver.takeRecords()",
   "function preserveNativeMutationRecords(records)",
   "function flushPreservedMutationBatches()",
@@ -1094,6 +1097,10 @@ for (const sharedObserverRequirement of [
     `Missing shared-observer hardening requirement: ${sharedObserverRequirement}`,
   );
 }
+assert(
+  !userscript.includes("sharedMutationObservers.add(this)"),
+  "Inactive logical mutation observers must not remain in the shared registry",
+);
 assert.match(
   userscript,
   /function dispatchMutations\(mutations\) \{[\s\S]{0,400}?flushPreservedMutationBatches\(\);[\s\S]{0,400}?dispatchMutationsWithDiagnostics\(mutations\)/,

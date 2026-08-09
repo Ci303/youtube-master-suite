@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.30
+// @version      0.1.31
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -30,7 +30,7 @@
 (() => {
   "use strict";
 
-  const MASTER_VERSION = "0.1.30";
+  const MASTER_VERSION = "0.1.31";
   const EXPECTED_MODULE_COUNT = 7;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -225,6 +225,18 @@
 
   function clearLogicalMutationRegistrations(registrations) {
     registrations.clear();
+  }
+
+  function setSharedMutationObserverRegistryState(
+    observers,
+    observer,
+    active,
+  ) {
+    if (active) {
+      observers.add(observer);
+    } else {
+      observers.delete(observer);
+    }
   }
 
   function cloneLogicalMutationRegistrations(registrations) {
@@ -761,7 +773,6 @@
       this.registrations = new Map();
       this.active = false;
       this.generation = 0;
-      sharedMutationObservers.add(this);
     }
 
     observe(target, options) {
@@ -769,6 +780,11 @@
       setLogicalMutationRegistration(this.registrations, target, options);
       if (!wasActive) this.generation += 1;
       this.active = true;
+      setSharedMutationObserverRegistryState(
+        sharedMutationObservers,
+        this,
+        true,
+      );
       requestMutationRefresh();
     }
 
@@ -777,6 +793,11 @@
       clearLogicalMutationRegistrations(this.registrations);
       this.active = false;
       this.generation += 1;
+      setSharedMutationObserverRegistryState(
+        sharedMutationObservers,
+        this,
+        false,
+      );
       requestMutationRefresh();
     }
 

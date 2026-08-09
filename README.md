@@ -36,6 +36,8 @@ deliberately avoids concatenating independent userscripts unchanged.
 - One native `MutationObserver` dispatches only the mutation records requested
   by each isolated module. Safe supersets are retained as modules enter and
   leave routes, and queued records are drained before an unavoidable rebuild.
+  Disconnected logical observers are removed from the shared registry so
+  discarded queue panels and their callback closures are not retained.
 - YouTube SPA lifecycle events are grouped so modules share native listeners
   while retaining their original capture or bubble phase. Each lifecycle
   delivery batches observer and stylesheet refreshes across all modules.
