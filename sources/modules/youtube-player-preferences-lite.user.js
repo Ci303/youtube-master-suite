@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Player Preferences Lite
 // @namespace    Citizen.youtube.player-preferences-lite
-// @version      1.39
+// @version      1.40
 // @description  Applies small YouTube player preferences without touching Enhancer-style miniplayer, queue, autoplay, or background playback controls.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-player-preferences-lite
@@ -49,6 +49,7 @@
     enablePlayerWheelVolume: true,
     requireRightMouseButtonForWheelVolume: true,
     wheelVolumeStep: 5,
+    contextMenuSuppressionWindowMs: 750,
     feedFilterProfiles: {
       default: {
         upcomingStreams: true,
@@ -361,7 +362,7 @@
   let liveChatCollapsePendingTimer = 0;
   let pendingLiveChatFrame = null;
   let rightButtonHeldOnPlayer = false;
-  let suppressNextContextMenu = false;
+  let contextMenuSuppressionExpiresAt = 0;
   let volumeOverlayHideTimer = 0;
 
   function isWatchPath() {
@@ -2721,14 +2722,20 @@
     event.stopImmediatePropagation();
 
     if (CONFIG.requireRightMouseButtonForWheelVolume) {
-      suppressNextContextMenu = true;
+      contextMenuSuppressionExpiresAt =
+        Date.now() + CONFIG.contextMenuSuppressionWindowMs;
     }
+  }
+
+  function clearContextMenuSuppression() {
+    contextMenuSuppressionExpiresAt = 0;
   }
 
   function handleMouseDown(event) {
     if (event.button !== 2) {
       return;
     }
+    clearContextMenuSuppression();
     rightButtonHeldOnPlayer = Boolean(getPlayerFromTarget(event.target));
   }
 
@@ -2740,12 +2747,16 @@
   }
 
   function handleContextMenu(event) {
-    if (!suppressNextContextMenu) {
+    if (!contextMenuSuppressionExpiresAt) {
       return;
     }
 
-    suppressNextContextMenu = false;
-    if (!getPlayerFromTarget(event.target)) {
+    const shouldSuppress =
+      Date.now() <= contextMenuSuppressionExpiresAt &&
+      Boolean(getPlayerFromTarget(event.target));
+    clearContextMenuSuppression();
+
+    if (!shouldSuppress) {
       return;
     }
 
@@ -2755,7 +2766,7 @@
 
   function handleWindowBlur() {
     rightButtonHeldOnPlayer = false;
-    suppressNextContextMenu = false;
+    clearContextMenuSuppression();
   }
 
   function applyDynamicPreferences(root = document) {
@@ -2796,6 +2807,7 @@
     clearLiveChatCollapseAttempts();
     clearPlayerLayoutRefreshAttempts();
     rightButtonHeldOnPlayer = false;
+    clearContextMenuSuppression();
   }
 
   function handleDescriptionClick(event) {

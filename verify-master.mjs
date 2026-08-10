@@ -1041,6 +1041,40 @@ assert(
     !playerPreferencesSource.includes("wheelVolumeListenerInstalled"),
   "Firefox right-button volume must not depend on temporary wheel-listener registration",
 );
+assert.match(
+  playerPreferencesSource,
+  /contextMenuSuppressionWindowMs:\s*750,/,
+  "Right-button volume context-menu suppression must remain time-bounded",
+);
+assert.match(
+  playerPreferencesSource,
+  /contextMenuSuppressionExpiresAt\s*=\s*Date\.now\(\)\s*\+\s*CONFIG\.contextMenuSuppressionWindowMs;/,
+  "Each handled right-button wheel step must renew the context-menu suppression deadline",
+);
+assert.match(
+  playerPreferencesSource,
+  /function handleContextMenu\(event\) \{[\s\S]*?Date\.now\(\) <= contextMenuSuppressionExpiresAt[\s\S]*?clearContextMenuSuppression\(\);[\s\S]*?event\.preventDefault\(\);/,
+  "Context-menu suppression must expire and remain one-shot",
+);
+assert.match(
+  playerPreferencesSource,
+  /function handleMouseDown\(event\) \{[\s\S]*?clearContextMenuSuppression\(\);\s+rightButtonHeldOnPlayer = Boolean\(getPlayerFromTarget\(event\.target\)\);/,
+  "A fresh right-button gesture must clear stale context-menu suppression before player detection",
+);
+assert.match(
+  playerPreferencesSource,
+  /function handleWindowBlur\(\) \{\s+rightButtonHeldOnPlayer = false;\s+clearContextMenuSuppression\(\);\s+\}/,
+  "Window blur must clear right-button volume gesture state",
+);
+assert.match(
+  playerPreferencesSource,
+  /function handleNavigateStart\(\) \{[\s\S]*?rightButtonHeldOnPlayer = false;\s+clearContextMenuSuppression\(\);\s+\}/,
+  "Navigation start must clear right-button volume gesture state",
+);
+assert(
+  !playerPreferencesSource.includes("suppressNextContextMenu"),
+  "The unbounded Boolean context-menu guard must not return",
+);
 for (const selector of [
   "ytd-miniplayer",
   "ytd-playlist-panel-renderer",

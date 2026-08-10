@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.31
+// @version      0.1.32
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -23,14 +23,14 @@
 //   Feed UI Cleaner v2.5 | sources/modules/youtube-feed-ui-cleaner.user.js | sha256:f97994fbd0cc055ea0dba30ba8c9a57e79f547af358d5257021372c59a0fcc69
 //   Miniplayer Button Restorer v1.4 | sources/modules/youtube-miniplayer-button-restorer.user.js | sha256:4cdb1ab40ccf08d695797e83cf7253f170fbec4606bed8b5e06270960c0cdc8b
 //   Page Coherence Guard v1.4 | sources/modules/youtube-page-coherence.user.js | sha256:4d10b8a0753e61415cbbd08ad9f3b73eab930550f7dd014bfdd588d017156409
-//   Player Preferences Lite v1.39 | sources/modules/youtube-player-preferences-lite.user.js | sha256:76549b916218ccc6f709c9baf0d9f6ded90251efd84d231415ba069196aa2fb6
+//   Player Preferences Lite v1.40 | sources/modules/youtube-player-preferences-lite.user.js | sha256:eec9f5f2fcc0e095c00c62a0b27bd63b05f195f238fe37e2b2d4b30dc0933bc4
 //   Scroll Miniplayer v5.17 | sources/modules/youtube-scroll-miniplayer.user.js | sha256:008b4e030d8372c20f004e50b96340279da8dbfb9c1ea712ace9e17def98fbf2
 //   Watch Layout Cleaner v1.26 | sources/modules/youtube-watch-layout-cleaner.user.js | sha256:f1f2522ef296c59cab06f4eca25a0be5a7122f1da8b16fd3b5eaf6957fcafac7
 
 (() => {
   "use strict";
 
-  const MASTER_VERSION = "0.1.31";
+  const MASTER_VERSION = "0.1.32";
   const EXPECTED_MODULE_COUNT = 7;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -3056,7 +3056,7 @@
 
   suite.registerModule(
     "playerPreferencesLite",
-    "Player Preferences Lite v1.39",
+    "Player Preferences Lite v1.40",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -3096,6 +3096,7 @@
           enablePlayerWheelVolume: true,
           requireRightMouseButtonForWheelVolume: true,
           wheelVolumeStep: 5,
+          contextMenuSuppressionWindowMs: 750,
           feedFilterProfiles: {
             default: {
               upcomingStreams: true,
@@ -3408,7 +3409,7 @@
         let liveChatCollapsePendingTimer = 0;
         let pendingLiveChatFrame = null;
         let rightButtonHeldOnPlayer = false;
-        let suppressNextContextMenu = false;
+        let contextMenuSuppressionExpiresAt = 0;
         let volumeOverlayHideTimer = 0;
 
         function isWatchPath() {
@@ -5761,14 +5762,20 @@
           event.stopImmediatePropagation();
 
           if (CONFIG.requireRightMouseButtonForWheelVolume) {
-            suppressNextContextMenu = true;
+            contextMenuSuppressionExpiresAt =
+              Date.now() + CONFIG.contextMenuSuppressionWindowMs;
           }
+        }
+
+        function clearContextMenuSuppression() {
+          contextMenuSuppressionExpiresAt = 0;
         }
 
         function handleMouseDown(event) {
           if (event.button !== 2) {
             return;
           }
+          clearContextMenuSuppression();
           rightButtonHeldOnPlayer = Boolean(getPlayerFromTarget(event.target));
         }
 
@@ -5780,12 +5787,16 @@
         }
 
         function handleContextMenu(event) {
-          if (!suppressNextContextMenu) {
+          if (!contextMenuSuppressionExpiresAt) {
             return;
           }
 
-          suppressNextContextMenu = false;
-          if (!getPlayerFromTarget(event.target)) {
+          const shouldSuppress =
+            Date.now() <= contextMenuSuppressionExpiresAt &&
+            Boolean(getPlayerFromTarget(event.target));
+          clearContextMenuSuppression();
+
+          if (!shouldSuppress) {
             return;
           }
 
@@ -5795,7 +5806,7 @@
 
         function handleWindowBlur() {
           rightButtonHeldOnPlayer = false;
-          suppressNextContextMenu = false;
+          clearContextMenuSuppression();
         }
 
         function applyDynamicPreferences(root = document) {
@@ -5836,6 +5847,7 @@
           clearLiveChatCollapseAttempts();
           clearPlayerLayoutRefreshAttempts();
           rightButtonHeldOnPlayer = false;
+          clearContextMenuSuppression();
         }
 
         function handleDescriptionClick(event) {
