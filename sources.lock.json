@@ -28,8 +28,8 @@
     },
     "scrollMiniplayer": {
       "path": "sources/modules/youtube-scroll-miniplayer.user.js",
-      "version": "5.17",
-      "sha256": "008b4e030d8372c20f004e50b96340279da8dbfb9c1ea712ace9e17def98fbf2"
+      "version": "5.18",
+      "sha256": "8ba933f67c03750ea10360457999deca7cfdc10cf57791eda138bd61a170667f"
     },
     "watchLayoutCleaner": {
       "path": "sources/modules/youtube-watch-layout-cleaner.user.js",

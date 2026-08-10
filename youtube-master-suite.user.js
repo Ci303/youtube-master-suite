@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.32
+// @version      0.1.33
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -24,13 +24,13 @@
 //   Miniplayer Button Restorer v1.4 | sources/modules/youtube-miniplayer-button-restorer.user.js | sha256:4cdb1ab40ccf08d695797e83cf7253f170fbec4606bed8b5e06270960c0cdc8b
 //   Page Coherence Guard v1.4 | sources/modules/youtube-page-coherence.user.js | sha256:4d10b8a0753e61415cbbd08ad9f3b73eab930550f7dd014bfdd588d017156409
 //   Player Preferences Lite v1.40 | sources/modules/youtube-player-preferences-lite.user.js | sha256:eec9f5f2fcc0e095c00c62a0b27bd63b05f195f238fe37e2b2d4b30dc0933bc4
-//   Scroll Miniplayer v5.17 | sources/modules/youtube-scroll-miniplayer.user.js | sha256:008b4e030d8372c20f004e50b96340279da8dbfb9c1ea712ace9e17def98fbf2
+//   Scroll Miniplayer v5.18 | sources/modules/youtube-scroll-miniplayer.user.js | sha256:8ba933f67c03750ea10360457999deca7cfdc10cf57791eda138bd61a170667f
 //   Watch Layout Cleaner v1.26 | sources/modules/youtube-watch-layout-cleaner.user.js | sha256:f1f2522ef296c59cab06f4eca25a0be5a7122f1da8b16fd3b5eaf6957fcafac7
 
 (() => {
   "use strict";
 
-  const MASTER_VERSION = "0.1.32";
+  const MASTER_VERSION = "0.1.33";
   const EXPECTED_MODULE_COUNT = 7;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -6091,7 +6091,7 @@
 
   suite.registerModule(
     "scrollMiniplayer",
-    "Scroll Miniplayer v5.17",
+    "Scroll Miniplayer v5.18",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -6229,6 +6229,7 @@
         let navigationStartPlayerVideoId = "";
         let suppressedUntilVisible = false;
         let navigationInProgress = false;
+        let navigationFinishPending = false;
         let mutationObserverActive = false;
         let playerAdoptionObserverActive = false;
         let playerAdoptionObserverTarget = null;
@@ -6435,8 +6436,21 @@
           navigationStartUrl = "";
           navigationStartPlayerVideoId = "";
           navigationInProgress = false;
+          navigationFinishPending = false;
           suppressedUntilVisible = false;
           scheduleRouteSync();
+        }
+
+        function finishNavigationLockIfSettled() {
+          if (!navigationInProgress) {
+            navigationFinishPending = false;
+            scheduleRouteSync();
+            return true;
+          }
+
+          if (!navigationHasSettledOrCancelled()) return false;
+          finishNavigationLock();
+          return true;
         }
 
         function scheduleNavigationRecoveryCheck(
@@ -6463,6 +6477,7 @@
           navigationStartUrl = location.href;
           navigationStartPlayerVideoId = getPlayerVideoId();
           navigationInProgress = true;
+          navigationFinishPending = false;
           NAVIGATION_RECOVERY_CHECK_DELAYS_MS.forEach((delay, index, delays) => {
             scheduleNavigationRecoveryCheck(delay, {
               allowUnchangedIdentity: index === delays.length - 1,
@@ -7982,9 +7997,16 @@
           deactivateImmediately();
         }, true);
         suite.addWindowListener("yt-navigate-finish", () => {
-          finishNavigationLock();
+          navigationFinishPending = true;
+          finishNavigationLockIfSettled();
         }, true);
-        suite.addWindowListener("yt-page-data-updated", scheduleRouteSync, true);
+        suite.addWindowListener("yt-page-data-updated", () => {
+          if (navigationFinishPending) {
+            finishNavigationLockIfSettled();
+            return;
+          }
+          scheduleRouteSync();
+        }, true);
         suite.addWindowListener("pageshow", () => {
           // A BFCache restore may not emit a matching YouTube navigation finish.
           finishNavigationLock();

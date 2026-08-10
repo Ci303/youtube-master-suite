@@ -742,10 +742,12 @@ assert.match(
 
 for (const navigationRequirement of [
   "let navigationInProgress = false;",
+  "let navigationFinishPending = false;",
   "if (navigationInProgress || !isEligiblePath() || isFullscreen()) return false;",
   "if (navigationInProgress || !isEligiblePath() || scrollScheduled) return;",
   "function beginNavigationLock()",
   "function finishNavigationLock()",
+  "function finishNavigationLockIfSettled()",
   "const NAVIGATION_RECOVERY_CHECK_DELAYS_MS = [1500, 5000, 10000];",
   "const NAVIGATION_RECOVERY_HARD_CAP_MS = 20000;",
   "function startMutationObservation()",
@@ -763,8 +765,18 @@ assert.match(
 );
 assert.match(
   scrollMiniplayerSource,
-  /window\.addEventListener\("yt-navigate-finish", \(\) => \{\s+finishNavigationLock\(\);/,
-  "Scroll Miniplayer must release its navigation lock before route sync",
+  /window\.addEventListener\("yt-navigate-finish", \(\) => \{\s+navigationFinishPending = true;\s+finishNavigationLockIfSettled\(\);/,
+  "Scroll Miniplayer must identity-gate its navigation-finish release",
+);
+assert.match(
+  scrollMiniplayerSource,
+  /window\.addEventListener\("yt-page-data-updated", \(\) => \{\s+if \(navigationFinishPending\) \{\s+finishNavigationLockIfSettled\(\);\s+return;\s+\}\s+scheduleRouteSync\(\);/,
+  "Scroll Miniplayer must retry a pending identity-gated release when page data catches up",
+);
+assert.match(
+  scrollMiniplayerSource,
+  /function finishNavigationLockIfSettled\(\) \{\s+if \(!navigationInProgress\) \{\s+navigationFinishPending = false;\s+scheduleRouteSync\(\);\s+return true;\s+\}\s+if \(!navigationHasSettledOrCancelled\(\)\) return false;\s+finishNavigationLock\(\);\s+return true;/,
+  "Scroll Miniplayer must verify destination identity before releasing a finished navigation",
 );
 assert.match(
   scrollMiniplayerSource,

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Scroll Miniplayer
 // @namespace    Citizen.youtube.scroll-miniplayer
-// @version      5.17
+// @version      5.18
 // @description  Floats the active YouTube player with compact queue context, YouTube-style controls, and synchronised corner selection across open windows.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-scroll-miniplayer
@@ -147,6 +147,7 @@
   let navigationStartPlayerVideoId = "";
   let suppressedUntilVisible = false;
   let navigationInProgress = false;
+  let navigationFinishPending = false;
   let mutationObserverActive = false;
   let playerAdoptionObserverActive = false;
   let playerAdoptionObserverTarget = null;
@@ -353,8 +354,21 @@
     navigationStartUrl = "";
     navigationStartPlayerVideoId = "";
     navigationInProgress = false;
+    navigationFinishPending = false;
     suppressedUntilVisible = false;
     scheduleRouteSync();
+  }
+
+  function finishNavigationLockIfSettled() {
+    if (!navigationInProgress) {
+      navigationFinishPending = false;
+      scheduleRouteSync();
+      return true;
+    }
+
+    if (!navigationHasSettledOrCancelled()) return false;
+    finishNavigationLock();
+    return true;
   }
 
   function scheduleNavigationRecoveryCheck(
@@ -381,6 +395,7 @@
     navigationStartUrl = location.href;
     navigationStartPlayerVideoId = getPlayerVideoId();
     navigationInProgress = true;
+    navigationFinishPending = false;
     NAVIGATION_RECOVERY_CHECK_DELAYS_MS.forEach((delay, index, delays) => {
       scheduleNavigationRecoveryCheck(delay, {
         allowUnchangedIdentity: index === delays.length - 1,
@@ -1906,9 +1921,16 @@
     deactivateImmediately();
   }, true);
   window.addEventListener("yt-navigate-finish", () => {
-    finishNavigationLock();
+    navigationFinishPending = true;
+    finishNavigationLockIfSettled();
   }, true);
-  window.addEventListener("yt-page-data-updated", scheduleRouteSync, true);
+  window.addEventListener("yt-page-data-updated", () => {
+    if (navigationFinishPending) {
+      finishNavigationLockIfSettled();
+      return;
+    }
+    scheduleRouteSync();
+  }, true);
   window.addEventListener("pageshow", () => {
     // A BFCache restore may not emit a matching YouTube navigation finish.
     finishNavigationLock();
