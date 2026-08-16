@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Master Suite
 // @namespace    Citizen.youtube.master-suite
-// @version      0.1.33
+// @version      0.1.34
 // @description  Consolidates Citizen YouTube userscripts with shared SPA event, mutation-observer, and stylesheet infrastructure.
 // @author       Citizen
 // @license      GNU GPLv3
@@ -23,14 +23,14 @@
 //   Feed UI Cleaner v2.5 | sources/modules/youtube-feed-ui-cleaner.user.js | sha256:f97994fbd0cc055ea0dba30ba8c9a57e79f547af358d5257021372c59a0fcc69
 //   Miniplayer Button Restorer v1.4 | sources/modules/youtube-miniplayer-button-restorer.user.js | sha256:4cdb1ab40ccf08d695797e83cf7253f170fbec4606bed8b5e06270960c0cdc8b
 //   Page Coherence Guard v1.4 | sources/modules/youtube-page-coherence.user.js | sha256:4d10b8a0753e61415cbbd08ad9f3b73eab930550f7dd014bfdd588d017156409
-//   Player Preferences Lite v1.40 | sources/modules/youtube-player-preferences-lite.user.js | sha256:eec9f5f2fcc0e095c00c62a0b27bd63b05f195f238fe37e2b2d4b30dc0933bc4
-//   Scroll Miniplayer v5.18 | sources/modules/youtube-scroll-miniplayer.user.js | sha256:8ba933f67c03750ea10360457999deca7cfdc10cf57791eda138bd61a170667f
-//   Watch Layout Cleaner v1.26 | sources/modules/youtube-watch-layout-cleaner.user.js | sha256:f1f2522ef296c59cab06f4eca25a0be5a7122f1da8b16fd3b5eaf6957fcafac7
+//   Player Preferences Lite v1.42 | sources/modules/youtube-player-preferences-lite.user.js | sha256:d9fc90c0d2cdd29c511809841266d99865a0edc4dbc8a438ed0ad2ca314fb468
+//   Scroll Miniplayer v5.19 | sources/modules/youtube-scroll-miniplayer.user.js | sha256:e3ff0832a76a144288d6d35b33e60fc0d4a102c220e003b89c02dc1f3064eb30
+//   Watch Layout Cleaner v1.27 | sources/modules/youtube-watch-layout-cleaner.user.js | sha256:cc07242866209b31af3193d136795431a4d6e0224354f2b95fee86bfc75180ff
 
 (() => {
   "use strict";
 
-  const MASTER_VERSION = "0.1.33";
+  const MASTER_VERSION = "0.1.34";
   const EXPECTED_MODULE_COUNT = 7;
   const HEALTH_ATTRIBUTE = "data-yt-master-suite";
   const ENABLED_MODULES = Object.freeze({
@@ -111,51 +111,61 @@
     );
   }
 
+  function mergeMutationOptions(leftOptions, rightOptions) {
+    const optionSets = [leftOptions, rightOptions].filter(Boolean);
+    const attributes = optionSets.some((options) => options.attributes);
+    const observeAllAttributes = optionSets.some(
+      (options) => options.attributes && !options.attributeFilter?.length,
+    );
+    const mergedOptions = {
+      attributes,
+      attributeOldValue: optionSets.some((options) => options.attributeOldValue),
+      childList: optionSets.some((options) => options.childList),
+      characterData: optionSets.some((options) => options.characterData),
+      characterDataOldValue: optionSets.some(
+        (options) => options.characterDataOldValue,
+      ),
+      subtree: optionSets.some((options) => options.subtree),
+    };
+
+    if (attributes && !observeAllAttributes) {
+      const attributeFilter = [
+        ...new Set(
+          optionSets.flatMap((options) => options.attributeFilter || []),
+        ),
+      ];
+      if (attributeFilter.length) mergedOptions.attributeFilter = attributeFilter;
+    }
+
+    return mergedOptions;
+  }
+
   function mutationCoverageCovers(availableCoverage, requestedCoverage) {
     if (
       !availableCoverage ||
       !requestedCoverage ||
-      !mutationOptionsCover(
-        availableCoverage.options,
-        requestedCoverage.options,
-      )
+      !(availableCoverage.registrations instanceof Map) ||
+      !(requestedCoverage.registrations instanceof Map) ||
+      availableCoverage.registrations.size !==
+        requestedCoverage.registrations.size
     ) {
       return false;
     }
 
-    const retainedTargets = new Set();
-    for (const requestedTarget of requestedCoverage.targets) {
-      if (availableCoverage.targets.has(requestedTarget)) {
-        retainedTargets.add(requestedTarget);
-        continue;
-      }
-
-      const coveringTarget = availableCoverage.options.subtree
-        ? [...availableCoverage.targets].find(
-            (availableTarget) =>
-              typeof availableTarget?.contains === "function" &&
-              availableTarget.contains(requestedTarget),
-          )
-        : null;
-      if (!coveringTarget) return false;
-      retainedTargets.add(coveringTarget);
-    }
-
-    for (const availableTarget of availableCoverage.targets) {
-      if (retainedTargets.has(availableTarget)) continue;
-      if (
-        !requestedCoverage.options.subtree ||
-        ![...requestedCoverage.targets].some(
-          (requestedTarget) =>
-            typeof requestedTarget?.contains === "function" &&
-            requestedTarget.contains(availableTarget),
-        )
-      ) {
-        return false;
-      }
-    }
-
-    return true;
+    // Require the same targets and equivalent per-target options. Retaining a
+    // broader native registration after logical observers narrow would preserve
+    // needless DOM traffic, while retaining removed targets can keep detached
+    // YouTube surfaces alive.
+    return [...requestedCoverage.registrations].every(
+      ([target, requestedOptions]) => {
+        const availableOptions = availableCoverage.registrations.get(target);
+        return Boolean(
+          availableOptions &&
+            mutationOptionsCover(availableOptions, requestedOptions) &&
+            mutationOptionsCover(requestedOptions, availableOptions),
+        );
+      },
+    );
   }
 
   function normaliseMutationOptions(options = {}) {
@@ -239,6 +249,145 @@
     }
   }
 
+  function logicalMutationOptionsEqual(leftOptions, rightOptions) {
+    for (const optionName of [
+      "attributes",
+      "attributeOldValue",
+      "childList",
+      "characterData",
+      "characterDataOldValue",
+      "subtree",
+    ]) {
+      if (leftOptions[optionName] !== rightOptions[optionName]) return false;
+    }
+
+    const leftHasAttributeFilter = Object.hasOwn(
+      leftOptions,
+      "attributeFilter",
+    );
+    const rightHasAttributeFilter = Object.hasOwn(
+      rightOptions,
+      "attributeFilter",
+    );
+    if (leftHasAttributeFilter !== rightHasAttributeFilter) return false;
+    if (!leftHasAttributeFilter) return true;
+
+    const leftFilter = new Set(leftOptions.attributeFilter);
+    const rightFilter = new Set(rightOptions.attributeFilter);
+    return (
+      leftFilter.size === rightFilter.size &&
+      [...leftFilter].every((attributeName) => rightFilter.has(attributeName))
+    );
+  }
+
+  function logicalMutationRegistrationsEqual(leftRegistrations, rightRegistrations) {
+    if (leftRegistrations.size !== rightRegistrations.size) return false;
+
+    return [...rightRegistrations].every(([target, rightOptions]) => {
+      const leftOptions = leftRegistrations.get(target);
+      return Boolean(
+        leftOptions &&
+          logicalMutationOptionsEqual(leftOptions, rightOptions),
+      );
+    });
+  }
+
+  function refreshImmediatelyPreservingPendingState(
+    getPending,
+    setPending,
+    refresh,
+  ) {
+    const wasPending = getPending();
+    try {
+      return refresh();
+    } catch (error) {
+      setPending(wasPending);
+      throw error;
+    }
+  }
+
+  function replaceLogicalMutationRegistrations(
+    observer,
+    observers,
+    registrations,
+    refresh,
+  ) {
+    const nextRegistrations = new Map();
+    for (const [target, options] of registrations) {
+      setLogicalMutationRegistration(nextRegistrations, target, options);
+    }
+
+    const wasActive = observer.active;
+    const nextActive = nextRegistrations.size > 0;
+    if (
+      wasActive === nextActive &&
+      logicalMutationRegistrationsEqual(
+        observer.registrations,
+        nextRegistrations,
+      )
+    ) {
+      return false;
+    }
+
+    const previousRegistrations = observer.registrations;
+    const previousGeneration = observer.generation;
+    const wasRegistered = observers.has(observer);
+    observer.registrations = nextRegistrations;
+    observer.active = nextActive;
+    // Active-to-active replacement retains the generation so records already
+    // queued under the old native coverage remain deliverable against the
+    // captured registration snapshot.
+    if (wasActive !== nextActive) observer.generation += 1;
+    setSharedMutationObserverRegistryState(
+      observers,
+      observer,
+      nextActive,
+    );
+    try {
+      refresh();
+    } catch (error) {
+      observer.registrations = previousRegistrations;
+      observer.active = wasActive;
+      observer.generation = previousGeneration;
+      setSharedMutationObserverRegistryState(
+        observers,
+        observer,
+        wasRegistered,
+      );
+      throw error;
+    }
+    return true;
+  }
+
+  function installReplacementMutationObserver(
+    NativeObserver,
+    callback,
+    requestedCoverage,
+    currentObserver,
+    preserveRecords,
+  ) {
+    const replacementObserver = new NativeObserver(callback);
+    try {
+      requestedCoverage.registrations.forEach((options, target) =>
+        replacementObserver.observe(target, options),
+      );
+    } catch (error) {
+      replacementObserver.disconnect();
+      throw error;
+    }
+
+    if (currentObserver) {
+      try {
+        preserveRecords(currentObserver.takeRecords());
+        currentObserver.disconnect();
+      } catch (error) {
+        replacementObserver.disconnect();
+        throw error;
+      }
+    }
+    return replacementObserver;
+  }
+
   function cloneLogicalMutationRegistrations(registrations) {
     return new Map(
       [...registrations].map(([target, options]) => [
@@ -289,45 +438,17 @@
   }
 
   function buildMutationCoverage(activeObservers) {
-    const registrations = activeObservers.flatMap((observer) =>
-      [...observer.registrations].map(([target, options]) => ({
-        target,
-        options,
-      })),
-    );
-    const attributes = registrations.some(({ options }) => options.attributes);
-    const observeAllAttributes = registrations.some(
-      ({ options }) => options.attributes && !options.attributeFilter,
-    );
-    const attributeFilter = observeAllAttributes
-      ? undefined
-      : [
-          ...new Set(
-            registrations.flatMap(
-              ({ options }) => options.attributeFilter || [],
-            ),
-          ),
-        ];
-    const options = {
-      attributes,
-      attributeOldValue: registrations.some(
-        ({ options }) => options.attributeOldValue,
-      ),
-      childList: registrations.some(({ options }) => options.childList),
-      characterData: registrations.some(({ options }) => options.characterData),
-      characterDataOldValue: registrations.some(
-        ({ options }) => options.characterDataOldValue,
-      ),
-      subtree: registrations.some(({ options }) => options.subtree),
-    };
-    if (attributes && attributeFilter?.length) {
-      options.attributeFilter = attributeFilter;
-    }
+    const registrations = new Map();
+    activeObservers.forEach((observer) => {
+      observer.registrations.forEach((options, target) => {
+        registrations.set(
+          target,
+          mergeMutationOptions(registrations.get(target), options),
+        );
+      });
+    });
 
-    return {
-      options,
-      targets: new Set(registrations.map(({ target }) => target)),
-    };
+    return { registrations };
   }
 
   function publishRuntimeErrors() {
@@ -741,23 +862,13 @@
       return;
     }
 
-    if (nativeMutationObserver) {
-      preserveNativeMutationRecords(nativeMutationObserver.takeRecords());
-      nativeMutationObserver.disconnect();
-    }
-    nativeMutationObserver = null;
-    nativeMutationCoverage = null;
-    nativeLogicalObserverStates = new Map();
-
-    const replacementObserver = new NativeMutationObserver(dispatchMutations);
-    try {
-      requestedCoverage.targets.forEach((target) =>
-        replacementObserver.observe(target, requestedCoverage.options),
-      );
-    } catch (error) {
-      replacementObserver.disconnect();
-      throw error;
-    }
+    const replacementObserver = installReplacementMutationObserver(
+      NativeMutationObserver,
+      dispatchMutations,
+      requestedCoverage,
+      nativeMutationObserver,
+      preserveNativeMutationRecords,
+    );
     nativeMutationObserver = replacementObserver;
     nativeMutationCoverage = requestedCoverage;
     nativeLogicalObserverStates = requestedLogicalObserverStates;
@@ -786,6 +897,22 @@
         true,
       );
       requestMutationRefresh();
+    }
+
+    replaceRegistrations(registrations) {
+      replaceLogicalMutationRegistrations(
+        this,
+        sharedMutationObservers,
+        registrations,
+        () =>
+          refreshImmediatelyPreservingPendingState(
+            () => mutationRefreshPending,
+            (pending) => {
+              mutationRefreshPending = pending;
+            },
+            refreshNativeMutationObserver,
+          ),
+      );
     }
 
     disconnect() {
@@ -3056,7 +3183,7 @@
 
   suite.registerModule(
     "playerPreferencesLite",
-    "Player Preferences Lite v1.40",
+    "Player Preferences Lite v1.42",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -3289,6 +3416,34 @@
           "ytd-watch-flexy ytd-watch-metadata",
           "ytd-watch-flexy ytd-video-primary-info-renderer",
         ].join(",");
+        const WATCH_DYNAMIC_MUTATION_ROOT_SELECTOR = [
+          "ytd-masthead",
+          "ytd-watch-flexy ytd-watch-metadata",
+          "ytd-watch-flexy ytd-video-primary-info-renderer",
+          "ytd-popup-container",
+          "tp-yt-iron-dropdown",
+        ].join(",");
+        const WATCH_RELATED_MUTATION_ROOT_SELECTOR =
+          "ytd-watch-flexy #secondary #related";
+        const DYNAMIC_MUTATION_OPTIONS = Object.freeze({
+          attributeFilter: Object.freeze([
+            "aria-label",
+            "class",
+            "hidden",
+            "href",
+            "show-yoodle",
+            "style",
+            "title",
+          ]),
+          attributes: true,
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+        const DYNAMIC_MUTATION_DISCOVERY_OPTIONS = Object.freeze({
+          childList: true,
+          subtree: true,
+        });
         const RYD_LIKE_BUTTON_SELECTOR = [
           "ytd-watch-flexy #segmented-like-button button",
           "ytd-watch-flexy like-button-view-model button",
@@ -4188,9 +4343,16 @@
 
         function setWatchActionHidden(actionElement, hidden) {
           if (hidden) {
-            actionElement.dataset[WATCH_ACTION_HIDDEN_DATASET_KEY] =
-              WATCH_ACTION_HIDDEN_VALUE;
-            actionElement.hidden = true;
+            if (
+              actionElement.dataset[WATCH_ACTION_HIDDEN_DATASET_KEY] !==
+              WATCH_ACTION_HIDDEN_VALUE
+            ) {
+              actionElement.dataset[WATCH_ACTION_HIDDEN_DATASET_KEY] =
+                WATCH_ACTION_HIDDEN_VALUE;
+            }
+            if (!actionElement.hidden) {
+              actionElement.hidden = true;
+            }
             return;
           }
 
@@ -4202,7 +4364,9 @@
           }
 
           delete actionElement.dataset[WATCH_ACTION_HIDDEN_DATASET_KEY];
-          actionElement.hidden = false;
+          if (actionElement.hidden) {
+            actionElement.hidden = false;
+          }
         }
 
         function getWatchActionMenuItemContainer(menuItem) {
@@ -5840,6 +6004,7 @@
           theaterModeUserDisabled = false;
           theaterModeAttemptKey = "";
           applyRoutePreferences();
+          configureDynamicMutationObserver();
           schedulePlayerLayoutRefreshAttempts();
         }
 
@@ -6018,10 +6183,101 @@
           addScopedMutationRoot(roots, mutation.target);
         }
 
+        function nodeContainsWatchDynamicMutationRoot(node) {
+          if (!node || node.nodeType !== Node.ELEMENT_NODE) {
+            return false;
+          }
+
+          return (
+            node.matches(WATCH_DYNAMIC_MUTATION_ROOT_SELECTOR) ||
+            Boolean(node.querySelector(WATCH_DYNAMIC_MUTATION_ROOT_SELECTOR)) ||
+            (!CONFIG.hideRelatedVideos &&
+              (node.matches(WATCH_RELATED_MUTATION_ROOT_SELECTOR) ||
+                Boolean(node.querySelector(WATCH_RELATED_MUTATION_ROOT_SELECTOR))))
+          );
+        }
+
+        function collectWatchDynamicMutationRoots() {
+          const candidates = [
+            ...document.querySelectorAll(WATCH_DYNAMIC_MUTATION_ROOT_SELECTOR),
+            ...(CONFIG.hideRelatedVideos
+              ? []
+              : document.querySelectorAll(WATCH_RELATED_MUTATION_ROOT_SELECTOR)),
+          ];
+
+          return new Set(
+            candidates.filter(
+              (candidate) =>
+                !candidates.some(
+                  (possibleAncestor) =>
+                    possibleAncestor !== candidate &&
+                    possibleAncestor.contains(candidate),
+                ),
+            ),
+          );
+        }
+
+        function mutationChangesWatchDynamicRoots(mutation) {
+          if (!isWatchPath() || mutation.type !== "childList") {
+            return false;
+          }
+
+          return [...mutation.addedNodes, ...mutation.removedNodes].some(
+            nodeContainsWatchDynamicMutationRoot,
+          );
+        }
+
+        let dynamicMutationObserverMode = "";
+        let watchDynamicMutationRoots = new Set();
+
+        function replaceObserverRegistrations(targetObserver, registrations) {
+          if (typeof targetObserver.replaceRegistrations === "function") {
+            targetObserver.replaceRegistrations(registrations);
+            return;
+          }
+
+          targetObserver.disconnect();
+          registrations.forEach(([target, options]) =>
+            targetObserver.observe(target, options),
+          );
+        }
+
+        function configureDynamicMutationObserver() {
+          const watchMode = isWatchPath();
+          const nextMode = watchMode ? "watch" : "document";
+          const nextWatchRoots = watchMode
+            ? collectWatchDynamicMutationRoots()
+            : new Set();
+          const rootsUnchanged =
+            dynamicMutationObserverMode === nextMode &&
+            watchDynamicMutationRoots.size === nextWatchRoots.size &&
+            [...watchDynamicMutationRoots].every(
+              (root) => root.isConnected && nextWatchRoots.has(root),
+            );
+          if (rootsUnchanged) {
+            return;
+          }
+
+          const nextRegistrations = watchMode
+            ? [
+                [document.documentElement, DYNAMIC_MUTATION_DISCOVERY_OPTIONS],
+                ...[...nextWatchRoots].map((root) => [
+                  root,
+                  DYNAMIC_MUTATION_OPTIONS,
+                ]),
+              ]
+            : [[document.documentElement, DYNAMIC_MUTATION_OPTIONS]];
+          replaceObserverRegistrations(observer, nextRegistrations);
+
+          dynamicMutationObserverMode = nextMode;
+          watchDynamicMutationRoots = nextWatchRoots;
+        }
+
         applyRoutePreferences();
 
         const observer = new MutationObserver((mutations) => {
           const roots = new Set();
+          let watchDynamicRootsChanged = false;
 
           for (const mutation of mutations) {
             if (
@@ -6033,26 +6289,17 @@
             }
 
             addMutationApplyRoots(roots, mutation);
+            watchDynamicRootsChanged ||=
+              mutationChangesWatchDynamicRoots(mutation);
           }
 
           roots.forEach((root) => scheduleApply(root));
+          if (watchDynamicRootsChanged) {
+            configureDynamicMutationObserver();
+          }
         });
 
-        observer.observe(document.documentElement, {
-          attributeFilter: [
-            "aria-label",
-            "class",
-            "hidden",
-            "href",
-            "show-yoodle",
-            "style",
-            "title",
-          ],
-          attributes: true,
-          childList: true,
-          characterData: true,
-          subtree: true,
-        });
+        configureDynamicMutationObserver();
 
         document.addEventListener("click", handleShortsClick, true);
         document.addEventListener("click", handleTheaterModeToggle, true);
@@ -6071,6 +6318,7 @@
         suite.addWindowListener(
           "yt-page-data-updated",
           () => {
+            configureDynamicMutationObserver();
             scheduleApply(document);
             scheduleLiveChatCollapseAttempts();
           },
@@ -6091,7 +6339,7 @@
 
   suite.registerModule(
     "scrollMiniplayer",
-    "Scroll Miniplayer v5.18",
+    "Scroll Miniplayer v5.19",
     "document-idle",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -7850,6 +8098,18 @@
           queuePanelObservers.clear();
         }
 
+        function replaceObserverRegistrations(targetObserver, registrations) {
+          if (typeof targetObserver.replaceRegistrations === "function") {
+            targetObserver.replaceRegistrations(registrations);
+            return;
+          }
+
+          targetObserver.disconnect();
+          registrations.forEach(([target, options]) =>
+            targetObserver.observe(target, options),
+          );
+        }
+
         function syncQueuePanelObservation(force = false) {
           if (force) stopQueuePanelObservation();
 
@@ -7874,20 +8134,23 @@
                 scheduleCompactQueueInfoSync();
               }
             });
-            observer.observe(panel, {
-              attributeFilter: QUEUE_PANEL_STATE_ATTRIBUTES,
-              attributes: true,
-              subtree: true,
-            });
+            const registrations = [
+              [panel, {
+                attributeFilter: QUEUE_PANEL_STATE_ATTRIBUTES,
+                attributes: true,
+                subtree: true,
+              }],
+            ];
             let ancestor = panel.parentElement;
             while (ancestor && ancestor !== document.body) {
-              observer.observe(ancestor, {
+              registrations.push([ancestor, {
                 attributeFilter: QUEUE_VISIBILITY_STATE_ATTRIBUTES,
                 attributes: true,
-              });
+              }]);
               if (ancestor.matches(WATCH_ROOT_SELECTOR)) break;
               ancestor = ancestor.parentElement;
             }
+            replaceObserverRegistrations(observer, registrations);
             queuePanelObservers.set(panel, observer);
           });
         }
@@ -8018,7 +8281,7 @@
 
   suite.registerModule(
     "watchLayoutCleaner",
-    "Watch Layout Cleaner v1.26",
+    "Watch Layout Cleaner v1.27",
     "document-start",
     () => {
       const MutationObserver = suite.SharedMutationObserver;
@@ -8542,14 +8805,12 @@
             return;
           }
 
-          railMutationObserver.disconnect();
-          observedRailMutationTargets = nextTargets;
-          observedRailMutationTargets.forEach((target) => {
+          const registrations = [...nextTargets].map((target) => {
             const isSecondaryRailAnchor =
               isSecondaryRailMutationAnchor(target);
             const isDiscoveryTarget = isDiscoveryMutationTarget(target);
             const isPlaylistPanel = target.matches(PLAYLIST_PANEL_SELECTOR);
-            railMutationObserver.observe(
+            return [
               target,
               isSecondaryRailAnchor
                 ? {
@@ -8576,8 +8837,22 @@
                       "#chat-container, ytd-engagement-panel-section-list-renderer",
                     ),
                   },
-            );
+            ];
           });
+          replaceObserverRegistrations(railMutationObserver, registrations);
+          observedRailMutationTargets = nextTargets;
+        }
+
+        function replaceObserverRegistrations(targetObserver, registrations) {
+          if (typeof targetObserver.replaceRegistrations === "function") {
+            targetObserver.replaceRegistrations(registrations);
+            return;
+          }
+
+          targetObserver.disconnect();
+          registrations.forEach(([target, options]) =>
+            targetObserver.observe(target, options),
+          );
         }
 
         const railMutationObserver = new MutationObserver((mutations) => {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Player Preferences Lite
 // @namespace    Citizen.youtube.player-preferences-lite
-// @version      1.40
+// @version      1.42
 // @description  Applies small YouTube player preferences without touching Enhancer-style miniplayer, queue, autoplay, or background playback controls.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-player-preferences-lite
@@ -242,6 +242,34 @@
     "ytd-watch-flexy ytd-watch-metadata",
     "ytd-watch-flexy ytd-video-primary-info-renderer",
   ].join(",");
+  const WATCH_DYNAMIC_MUTATION_ROOT_SELECTOR = [
+    "ytd-masthead",
+    "ytd-watch-flexy ytd-watch-metadata",
+    "ytd-watch-flexy ytd-video-primary-info-renderer",
+    "ytd-popup-container",
+    "tp-yt-iron-dropdown",
+  ].join(",");
+  const WATCH_RELATED_MUTATION_ROOT_SELECTOR =
+    "ytd-watch-flexy #secondary #related";
+  const DYNAMIC_MUTATION_OPTIONS = Object.freeze({
+    attributeFilter: Object.freeze([
+      "aria-label",
+      "class",
+      "hidden",
+      "href",
+      "show-yoodle",
+      "style",
+      "title",
+    ]),
+    attributes: true,
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
+  const DYNAMIC_MUTATION_DISCOVERY_OPTIONS = Object.freeze({
+    childList: true,
+    subtree: true,
+  });
   const RYD_LIKE_BUTTON_SELECTOR = [
     "ytd-watch-flexy #segmented-like-button button",
     "ytd-watch-flexy like-button-view-model button",
@@ -1141,9 +1169,16 @@
 
   function setWatchActionHidden(actionElement, hidden) {
     if (hidden) {
-      actionElement.dataset[WATCH_ACTION_HIDDEN_DATASET_KEY] =
-        WATCH_ACTION_HIDDEN_VALUE;
-      actionElement.hidden = true;
+      if (
+        actionElement.dataset[WATCH_ACTION_HIDDEN_DATASET_KEY] !==
+        WATCH_ACTION_HIDDEN_VALUE
+      ) {
+        actionElement.dataset[WATCH_ACTION_HIDDEN_DATASET_KEY] =
+          WATCH_ACTION_HIDDEN_VALUE;
+      }
+      if (!actionElement.hidden) {
+        actionElement.hidden = true;
+      }
       return;
     }
 
@@ -1155,7 +1190,9 @@
     }
 
     delete actionElement.dataset[WATCH_ACTION_HIDDEN_DATASET_KEY];
-    actionElement.hidden = false;
+    if (actionElement.hidden) {
+      actionElement.hidden = false;
+    }
   }
 
   function getWatchActionMenuItemContainer(menuItem) {
@@ -2800,6 +2837,7 @@
     theaterModeUserDisabled = false;
     theaterModeAttemptKey = "";
     applyRoutePreferences();
+    configureDynamicMutationObserver();
     schedulePlayerLayoutRefreshAttempts();
   }
 
@@ -2978,10 +3016,101 @@
     addScopedMutationRoot(roots, mutation.target);
   }
 
+  function nodeContainsWatchDynamicMutationRoot(node) {
+    if (!node || node.nodeType !== Node.ELEMENT_NODE) {
+      return false;
+    }
+
+    return (
+      node.matches(WATCH_DYNAMIC_MUTATION_ROOT_SELECTOR) ||
+      Boolean(node.querySelector(WATCH_DYNAMIC_MUTATION_ROOT_SELECTOR)) ||
+      (!CONFIG.hideRelatedVideos &&
+        (node.matches(WATCH_RELATED_MUTATION_ROOT_SELECTOR) ||
+          Boolean(node.querySelector(WATCH_RELATED_MUTATION_ROOT_SELECTOR))))
+    );
+  }
+
+  function collectWatchDynamicMutationRoots() {
+    const candidates = [
+      ...document.querySelectorAll(WATCH_DYNAMIC_MUTATION_ROOT_SELECTOR),
+      ...(CONFIG.hideRelatedVideos
+        ? []
+        : document.querySelectorAll(WATCH_RELATED_MUTATION_ROOT_SELECTOR)),
+    ];
+
+    return new Set(
+      candidates.filter(
+        (candidate) =>
+          !candidates.some(
+            (possibleAncestor) =>
+              possibleAncestor !== candidate &&
+              possibleAncestor.contains(candidate),
+          ),
+      ),
+    );
+  }
+
+  function mutationChangesWatchDynamicRoots(mutation) {
+    if (!isWatchPath() || mutation.type !== "childList") {
+      return false;
+    }
+
+    return [...mutation.addedNodes, ...mutation.removedNodes].some(
+      nodeContainsWatchDynamicMutationRoot,
+    );
+  }
+
+  let dynamicMutationObserverMode = "";
+  let watchDynamicMutationRoots = new Set();
+
+  function replaceObserverRegistrations(targetObserver, registrations) {
+    if (typeof targetObserver.replaceRegistrations === "function") {
+      targetObserver.replaceRegistrations(registrations);
+      return;
+    }
+
+    targetObserver.disconnect();
+    registrations.forEach(([target, options]) =>
+      targetObserver.observe(target, options),
+    );
+  }
+
+  function configureDynamicMutationObserver() {
+    const watchMode = isWatchPath();
+    const nextMode = watchMode ? "watch" : "document";
+    const nextWatchRoots = watchMode
+      ? collectWatchDynamicMutationRoots()
+      : new Set();
+    const rootsUnchanged =
+      dynamicMutationObserverMode === nextMode &&
+      watchDynamicMutationRoots.size === nextWatchRoots.size &&
+      [...watchDynamicMutationRoots].every(
+        (root) => root.isConnected && nextWatchRoots.has(root),
+      );
+    if (rootsUnchanged) {
+      return;
+    }
+
+    const nextRegistrations = watchMode
+      ? [
+          [document.documentElement, DYNAMIC_MUTATION_DISCOVERY_OPTIONS],
+          ...[...nextWatchRoots].map((root) => [
+            root,
+            DYNAMIC_MUTATION_OPTIONS,
+          ]),
+        ]
+      : [[document.documentElement, DYNAMIC_MUTATION_OPTIONS]];
+    replaceObserverRegistrations(observer, nextRegistrations);
+
+    dynamicMutationObserverMode = nextMode;
+    watchDynamicMutationRoots = nextWatchRoots;
+  }
+
   applyRoutePreferences();
 
   const observer = new MutationObserver((mutations) => {
     const roots = new Set();
+    let watchDynamicRootsChanged = false;
 
     for (const mutation of mutations) {
       if (
@@ -2993,26 +3122,17 @@
       }
 
       addMutationApplyRoots(roots, mutation);
+      watchDynamicRootsChanged ||=
+        mutationChangesWatchDynamicRoots(mutation);
     }
 
     roots.forEach((root) => scheduleApply(root));
+    if (watchDynamicRootsChanged) {
+      configureDynamicMutationObserver();
+    }
   });
 
-  observer.observe(document.documentElement, {
-    attributeFilter: [
-      "aria-label",
-      "class",
-      "hidden",
-      "href",
-      "show-yoodle",
-      "style",
-      "title",
-    ],
-    attributes: true,
-    childList: true,
-    characterData: true,
-    subtree: true,
-  });
+  configureDynamicMutationObserver();
 
   document.addEventListener("click", handleShortsClick, true);
   document.addEventListener("click", handleTheaterModeToggle, true);
@@ -3031,6 +3151,7 @@
   window.addEventListener(
     "yt-page-data-updated",
     () => {
+      configureDynamicMutationObserver();
       scheduleApply(document);
       scheduleLiveChatCollapseAttempts();
     },

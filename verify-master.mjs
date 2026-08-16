@@ -402,7 +402,7 @@ for (const watchLayoutRequirement of [
   "if (secondary?.parentElement)",
   "function isSecondaryRailMutationAnchor(target)",
   "function refreshRailMutationObserver()",
-  "railMutationObserver.observe(",
+  "replaceObserverRegistrations(railMutationObserver, registrations);",
   "const DISCOVERY_MUTATION_ATTRIBUTES = [",
   "const SURFACE_STATE_MUTATION_ATTRIBUTES = [",
   "const railIsEmpty =",
@@ -513,9 +513,9 @@ assert(
 );
 
 assert.equal(
-  occurrences(userscript, "new NativeMutationObserver("),
+  occurrences(userscript, "new NativeObserver(callback)"),
   1,
-  "The master must create exactly one native MutationObserver",
+  "The master must retain exactly one native MutationObserver construction site",
 );
 assert.equal(
   occurrences(userscript, 'styleElement = document.createElement("style")'),
@@ -1017,6 +1017,63 @@ assert.match(
   /function handleNavigateStart\(\) \{\s+clearLiveChatCollapseAttempts\(\);\s+clearPlayerLayoutRefreshAttempts\(\);/,
   "Navigation start must cancel pending player-layout retries",
 );
+for (const mutationAttribute of [
+  "aria-label",
+  "class",
+  "hidden",
+  "href",
+  "show-yoodle",
+  "style",
+  "title",
+]) {
+  assert.match(
+    playerPreferencesSource,
+    new RegExp(
+      `const DYNAMIC_MUTATION_OPTIONS = Object\\.freeze\\(\\{[\\s\\S]{0,400}?"${mutationAttribute}"`,
+    ),
+    `Player Preferences scoped mutation tracking lost ${mutationAttribute}`,
+  );
+}
+assert.match(
+  playerPreferencesSource,
+  /const DYNAMIC_MUTATION_DISCOVERY_OPTIONS = Object\.freeze\(\{\s+childList: true,\s+subtree: true,\s+\}\);/,
+  "Player Preferences document discovery must remain child-list-only",
+);
+assert.match(
+  playerPreferencesSource,
+  /function configureDynamicMutationObserver\(\) \{[\s\S]+?const nextRegistrations = watchMode[\s\S]+?DYNAMIC_MUTATION_DISCOVERY_OPTIONS[\s\S]+?nextWatchRoots[\s\S]+?DYNAMIC_MUTATION_OPTIONS[\s\S]+?replaceObserverRegistrations\(observer, nextRegistrations\);/,
+  "Player Preferences must scope rich watch-page mutations while retaining full feed reconciliation",
+);
+assert.match(
+  playerPreferencesSource,
+  /function collectWatchDynamicMutationRoots\(\) \{[\s\S]+?possibleAncestor !== candidate &&[\s\S]+?possibleAncestor\.contains\(candidate\)/,
+  "Player Preferences must collapse nested watch roots before registering rich mutation tracking",
+);
+assert.match(
+  playerPreferencesSource,
+  /CONFIG\.hideRelatedVideos[\s\S]+?WATCH_RELATED_MUTATION_ROOT_SELECTOR/,
+  "Player Preferences must retain rich related-rail tracking when related videos are enabled",
+);
+assert.match(
+  playerPreferencesSource,
+  /function mutationChangesWatchDynamicRoots\(mutation\) \{[\s\S]+?mutation\.addedNodes,[\s\S]+?mutation\.removedNodes[\s\S]+?nodeContainsWatchDynamicMutationRoot/,
+  "Player Preferences must refresh scoped registrations for added and removed YouTube surfaces",
+);
+assert.match(
+  playerPreferencesSource,
+  /function handleNavigateFinish\(\) \{[\s\S]+?applyRoutePreferences\(\);\s+configureDynamicMutationObserver\(\);/,
+  "Player Preferences must refresh its scoped observer after SPA navigation",
+);
+assert.match(
+  playerPreferencesSource,
+  /"yt-page-data-updated",\s+\(\) => \{\s+configureDynamicMutationObserver\(\);\s+scheduleApply\(document\);/,
+  "Player Preferences page-data fallback must refresh observation roots and apply the full page",
+);
+assert.match(
+  playerPreferencesSource,
+  /function setWatchActionHidden\(actionElement, hidden\) \{[\s\S]+?if \(!actionElement\.hidden\) \{\s+actionElement\.hidden = true;[\s\S]+?if \(actionElement\.hidden\) \{\s+actionElement\.hidden = false;/,
+  "Player Preferences watch-action writes must remain idempotent",
+);
 const wheelHandlerIndex = playerPreferencesSource.indexOf(
   "function handleWheelVolume(event)",
 );
@@ -1124,10 +1181,21 @@ for (const sharedObserverRequirement of [
   "function normaliseMutationOptions(options = {})",
   "function setLogicalMutationRegistration(registrations, target, options)",
   "function setSharedMutationObserverRegistryState(",
+  "function logicalMutationOptionsEqual(",
+  "function logicalMutationRegistrationsEqual(",
+  "function refreshImmediatelyPreservingPendingState(",
+  "function replaceLogicalMutationRegistrations(",
+  "function installReplacementMutationObserver(",
   "function cloneLogicalMutationRegistrations(registrations)",
   "function mutationMatchesRegistrations(",
+  "function mergeMutationOptions(leftOptions, rightOptions)",
   "function buildMutationCoverage(activeObservers)",
+  "const registrations = new Map();",
+  "requestedCoverage.registrations.forEach((options, target)",
+  "replacementObserver.observe(target, options)",
   "this.registrations = new Map();",
+  "replaceRegistrations(registrations) {",
+  "replaceLogicalMutationRegistrations(\n        this,\n        sharedMutationObservers,\n        registrations,",
   "setLogicalMutationRegistration(this.registrations, target, options);",
   "setSharedMutationObserverRegistryState(\n        sharedMutationObservers,\n        this,\n        true,",
   "clearLogicalMutationRegistrations(this.registrations);",
@@ -1143,6 +1211,31 @@ for (const sharedObserverRequirement of [
     `Missing shared-observer hardening requirement: ${sharedObserverRequirement}`,
   );
 }
+assert.match(
+  userscript,
+  /function mutationCoverageCovers\(availableCoverage, requestedCoverage\) \{[\s\S]+?availableCoverage\.registrations\.size !==\s+requestedCoverage\.registrations\.size[\s\S]+?mutationOptionsCover\(availableOptions, requestedOptions\)[\s\S]+?mutationOptionsCover\(requestedOptions, availableOptions\)/,
+  "Shared mutation coverage must rebuild when targets or per-target options narrow",
+);
+assert.match(
+  userscript,
+  /function replaceLogicalMutationRegistrations\([\s\S]+?logicalMutationRegistrationsEqual\([\s\S]+?const previousRegistrations = observer\.registrations;[\s\S]+?if \(wasActive !== nextActive\) observer\.generation \+= 1;[\s\S]+?try \{\s+refresh\(\);\s+\} catch \(error\) \{[\s\S]+?observer\.registrations = previousRegistrations;[\s\S]+?throw error;/,
+  "Atomic logical replacement must no-op on equality, retain active generations and roll back failed refreshes",
+);
+assert.match(
+  userscript,
+  /function logicalMutationOptionsEqual\([\s\S]+?Object\.hasOwn\(\s+leftOptions,\s+"attributeFilter",[\s\S]+?leftHasAttributeFilter !== rightHasAttributeFilter[\s\S]+?new Set\(leftOptions\.attributeFilter\)[\s\S]+?rightFilter\.has\(attributeName\)/,
+  "Logical registration equality must distinguish unrestricted and empty attribute filters while comparing named filters as sets",
+);
+assert.match(
+  userscript,
+  /replaceRegistrations\(registrations\) \{[\s\S]+?refreshImmediatelyPreservingPendingState\([\s\S]+?\(\) => mutationRefreshPending,[\s\S]+?mutationRefreshPending = pending;[\s\S]+?refreshNativeMutationObserver/,
+  "A failed atomic refresh must restore any previously pending shared reconciliation",
+);
+assert.match(
+  userscript,
+  /function installReplacementMutationObserver\([\s\S]+?replacementObserver\.observe\(target, options\)[\s\S]+?preserveRecords\(currentObserver\.takeRecords\(\)\);\s+currentObserver\.disconnect\(\);/,
+  "Native replacement coverage must be live before old records are drained and disconnected",
+);
 assert(
   !userscript.includes("sharedMutationObservers.add(this)"),
   "Inactive logical mutation observers must not remain in the shared registry",
@@ -1151,6 +1244,22 @@ assert.match(
   userscript,
   /function dispatchMutations\(mutations\) \{[\s\S]{0,400}?flushPreservedMutationBatches\(\);[\s\S]{0,400}?dispatchMutationsWithDiagnostics\(mutations\)/,
   "Preserved mutation records must be delivered before replacement-observer records",
+);
+for (const [moduleName, source] of [
+  ["Player Preferences", playerPreferencesSource],
+  ["Scroll Miniplayer", scrollMiniplayerSource],
+  ["Watch Layout", watchLayoutSource],
+]) {
+  assert.match(
+    source,
+    /function replaceObserverRegistrations\(targetObserver, registrations\) \{\s+if \(typeof targetObserver\.replaceRegistrations === "function"\) \{\s+targetObserver\.replaceRegistrations\(registrations\);[\s\S]+?targetObserver\.disconnect\(\);[\s\S]+?targetObserver\.observe\(target, options\)/,
+    `${moduleName} must use atomic master registrations with a standalone native fallback`,
+  );
+}
+assert.match(
+  scrollMiniplayerSource,
+  /const registrations = \[[\s\S]+?QUEUE_PANEL_STATE_ATTRIBUTES[\s\S]+?registrations\.push\(\[ancestor,[\s\S]+?QUEUE_VISIBILITY_STATE_ATTRIBUTES[\s\S]+?replaceObserverRegistrations\(observer, registrations\);/,
+  "Scroll Miniplayer must register each queue panel and its visibility ancestors atomically",
 );
 assert.match(
   userscript,

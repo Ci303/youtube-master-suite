@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Watch Layout Cleaner
 // @namespace    Citizen.youtube.watch-layout-cleaner
-// @version      1.26
+// @version      1.27
 // @description  Expands YouTube watch pages, keeps the right rail fixed at SponsorBlock-friendly width, and widens metadata/comments.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-watch-layout-cleaner
@@ -527,14 +527,12 @@ ${QUEUE_THUMBNAIL_FALLBACK_STYLE_SELECTOR} {
       return;
     }
 
-    railMutationObserver.disconnect();
-    observedRailMutationTargets = nextTargets;
-    observedRailMutationTargets.forEach((target) => {
+    const registrations = [...nextTargets].map((target) => {
       const isSecondaryRailAnchor =
         isSecondaryRailMutationAnchor(target);
       const isDiscoveryTarget = isDiscoveryMutationTarget(target);
       const isPlaylistPanel = target.matches(PLAYLIST_PANEL_SELECTOR);
-      railMutationObserver.observe(
+      return [
         target,
         isSecondaryRailAnchor
           ? {
@@ -561,8 +559,22 @@ ${QUEUE_THUMBNAIL_FALLBACK_STYLE_SELECTOR} {
                 "#chat-container, ytd-engagement-panel-section-list-renderer",
               ),
             },
-      );
+      ];
     });
+    replaceObserverRegistrations(railMutationObserver, registrations);
+    observedRailMutationTargets = nextTargets;
+  }
+
+  function replaceObserverRegistrations(targetObserver, registrations) {
+    if (typeof targetObserver.replaceRegistrations === "function") {
+      targetObserver.replaceRegistrations(registrations);
+      return;
+    }
+
+    targetObserver.disconnect();
+    registrations.forEach(([target, options]) =>
+      targetObserver.observe(target, options),
+    );
   }
 
   const railMutationObserver = new MutationObserver((mutations) => {

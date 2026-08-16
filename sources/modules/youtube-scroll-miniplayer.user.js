@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube Scroll Miniplayer
 // @namespace    Citizen.youtube.scroll-miniplayer
-// @version      5.18
+// @version      5.19
 // @description  Floats the active YouTube player with compact queue context, YouTube-style controls, and synchronised corner selection across open windows.
 // @author       Citizen
 // @homepageURL  https://github.com/Ci303/youtube-scroll-miniplayer
@@ -1774,6 +1774,18 @@
     queuePanelObservers.clear();
   }
 
+  function replaceObserverRegistrations(targetObserver, registrations) {
+    if (typeof targetObserver.replaceRegistrations === "function") {
+      targetObserver.replaceRegistrations(registrations);
+      return;
+    }
+
+    targetObserver.disconnect();
+    registrations.forEach(([target, options]) =>
+      targetObserver.observe(target, options),
+    );
+  }
+
   function syncQueuePanelObservation(force = false) {
     if (force) stopQueuePanelObservation();
 
@@ -1798,20 +1810,23 @@
           scheduleCompactQueueInfoSync();
         }
       });
-      observer.observe(panel, {
-        attributeFilter: QUEUE_PANEL_STATE_ATTRIBUTES,
-        attributes: true,
-        subtree: true,
-      });
+      const registrations = [
+        [panel, {
+          attributeFilter: QUEUE_PANEL_STATE_ATTRIBUTES,
+          attributes: true,
+          subtree: true,
+        }],
+      ];
       let ancestor = panel.parentElement;
       while (ancestor && ancestor !== document.body) {
-        observer.observe(ancestor, {
+        registrations.push([ancestor, {
           attributeFilter: QUEUE_VISIBILITY_STATE_ATTRIBUTES,
           attributes: true,
-        });
+        }]);
         if (ancestor.matches(WATCH_ROOT_SELECTOR)) break;
         ancestor = ancestor.parentElement;
       }
+      replaceObserverRegistrations(observer, registrations);
       queuePanelObservers.set(panel, observer);
     });
   }

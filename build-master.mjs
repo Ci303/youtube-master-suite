@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MASTER_VERSION = "0.1.33";
+const MASTER_VERSION = "0.1.34";
 const suiteDirectory = dirname(fileURLToPath(import.meta.url));
 const outputPath = join(suiteDirectory, "youtube-master-suite.user.js");
 const releaseManifestPath = join(suiteDirectory, "release-manifest.json");
@@ -53,51 +53,61 @@ function mutationOptionsCover(availableOptions, requestedOptions) {
   );
 }
 
+function mergeMutationOptions(leftOptions, rightOptions) {
+  const optionSets = [leftOptions, rightOptions].filter(Boolean);
+  const attributes = optionSets.some((options) => options.attributes);
+  const observeAllAttributes = optionSets.some(
+    (options) => options.attributes && !options.attributeFilter?.length,
+  );
+  const mergedOptions = {
+    attributes,
+    attributeOldValue: optionSets.some((options) => options.attributeOldValue),
+    childList: optionSets.some((options) => options.childList),
+    characterData: optionSets.some((options) => options.characterData),
+    characterDataOldValue: optionSets.some(
+      (options) => options.characterDataOldValue,
+    ),
+    subtree: optionSets.some((options) => options.subtree),
+  };
+
+  if (attributes && !observeAllAttributes) {
+    const attributeFilter = [
+      ...new Set(
+        optionSets.flatMap((options) => options.attributeFilter || []),
+      ),
+    ];
+    if (attributeFilter.length) mergedOptions.attributeFilter = attributeFilter;
+  }
+
+  return mergedOptions;
+}
+
 function mutationCoverageCovers(availableCoverage, requestedCoverage) {
   if (
     !availableCoverage ||
     !requestedCoverage ||
-    !mutationOptionsCover(
-      availableCoverage.options,
-      requestedCoverage.options,
-    )
+    !(availableCoverage.registrations instanceof Map) ||
+    !(requestedCoverage.registrations instanceof Map) ||
+    availableCoverage.registrations.size !==
+      requestedCoverage.registrations.size
   ) {
     return false;
   }
 
-  const retainedTargets = new Set();
-  for (const requestedTarget of requestedCoverage.targets) {
-    if (availableCoverage.targets.has(requestedTarget)) {
-      retainedTargets.add(requestedTarget);
-      continue;
-    }
-
-    const coveringTarget = availableCoverage.options.subtree
-      ? [...availableCoverage.targets].find(
-          (availableTarget) =>
-            typeof availableTarget?.contains === "function" &&
-            availableTarget.contains(requestedTarget),
-        )
-      : null;
-    if (!coveringTarget) return false;
-    retainedTargets.add(coveringTarget);
-  }
-
-  for (const availableTarget of availableCoverage.targets) {
-    if (retainedTargets.has(availableTarget)) continue;
-    if (
-      !requestedCoverage.options.subtree ||
-      ![...requestedCoverage.targets].some(
-        (requestedTarget) =>
-          typeof requestedTarget?.contains === "function" &&
-          requestedTarget.contains(availableTarget),
-      )
-    ) {
-      return false;
-    }
-  }
-
-  return true;
+  // Require the same targets and equivalent per-target options. Retaining a
+  // broader native registration after logical observers narrow would preserve
+  // needless DOM traffic, while retaining removed targets can keep detached
+  // YouTube surfaces alive.
+  return [...requestedCoverage.registrations].every(
+    ([target, requestedOptions]) => {
+      const availableOptions = availableCoverage.registrations.get(target);
+      return Boolean(
+        availableOptions &&
+          mutationOptionsCover(availableOptions, requestedOptions) &&
+          mutationOptionsCover(requestedOptions, availableOptions),
+      );
+    },
+  );
 }
 
 function normaliseMutationOptions(options = {}) {
@@ -181,6 +191,145 @@ function setSharedMutationObserverRegistryState(
   }
 }
 
+function logicalMutationOptionsEqual(leftOptions, rightOptions) {
+  for (const optionName of [
+    "attributes",
+    "attributeOldValue",
+    "childList",
+    "characterData",
+    "characterDataOldValue",
+    "subtree",
+  ]) {
+    if (leftOptions[optionName] !== rightOptions[optionName]) return false;
+  }
+
+  const leftHasAttributeFilter = Object.hasOwn(
+    leftOptions,
+    "attributeFilter",
+  );
+  const rightHasAttributeFilter = Object.hasOwn(
+    rightOptions,
+    "attributeFilter",
+  );
+  if (leftHasAttributeFilter !== rightHasAttributeFilter) return false;
+  if (!leftHasAttributeFilter) return true;
+
+  const leftFilter = new Set(leftOptions.attributeFilter);
+  const rightFilter = new Set(rightOptions.attributeFilter);
+  return (
+    leftFilter.size === rightFilter.size &&
+    [...leftFilter].every((attributeName) => rightFilter.has(attributeName))
+  );
+}
+
+function logicalMutationRegistrationsEqual(leftRegistrations, rightRegistrations) {
+  if (leftRegistrations.size !== rightRegistrations.size) return false;
+
+  return [...rightRegistrations].every(([target, rightOptions]) => {
+    const leftOptions = leftRegistrations.get(target);
+    return Boolean(
+      leftOptions &&
+        logicalMutationOptionsEqual(leftOptions, rightOptions),
+    );
+  });
+}
+
+function refreshImmediatelyPreservingPendingState(
+  getPending,
+  setPending,
+  refresh,
+) {
+  const wasPending = getPending();
+  try {
+    return refresh();
+  } catch (error) {
+    setPending(wasPending);
+    throw error;
+  }
+}
+
+function replaceLogicalMutationRegistrations(
+  observer,
+  observers,
+  registrations,
+  refresh,
+) {
+  const nextRegistrations = new Map();
+  for (const [target, options] of registrations) {
+    setLogicalMutationRegistration(nextRegistrations, target, options);
+  }
+
+  const wasActive = observer.active;
+  const nextActive = nextRegistrations.size > 0;
+  if (
+    wasActive === nextActive &&
+    logicalMutationRegistrationsEqual(
+      observer.registrations,
+      nextRegistrations,
+    )
+  ) {
+    return false;
+  }
+
+  const previousRegistrations = observer.registrations;
+  const previousGeneration = observer.generation;
+  const wasRegistered = observers.has(observer);
+  observer.registrations = nextRegistrations;
+  observer.active = nextActive;
+  // Active-to-active replacement retains the generation so records already
+  // queued under the old native coverage remain deliverable against the
+  // captured registration snapshot.
+  if (wasActive !== nextActive) observer.generation += 1;
+  setSharedMutationObserverRegistryState(
+    observers,
+    observer,
+    nextActive,
+  );
+  try {
+    refresh();
+  } catch (error) {
+    observer.registrations = previousRegistrations;
+    observer.active = wasActive;
+    observer.generation = previousGeneration;
+    setSharedMutationObserverRegistryState(
+      observers,
+      observer,
+      wasRegistered,
+    );
+    throw error;
+  }
+  return true;
+}
+
+function installReplacementMutationObserver(
+  NativeObserver,
+  callback,
+  requestedCoverage,
+  currentObserver,
+  preserveRecords,
+) {
+  const replacementObserver = new NativeObserver(callback);
+  try {
+    requestedCoverage.registrations.forEach((options, target) =>
+      replacementObserver.observe(target, options),
+    );
+  } catch (error) {
+    replacementObserver.disconnect();
+    throw error;
+  }
+
+  if (currentObserver) {
+    try {
+      preserveRecords(currentObserver.takeRecords());
+      currentObserver.disconnect();
+    } catch (error) {
+      replacementObserver.disconnect();
+      throw error;
+    }
+  }
+  return replacementObserver;
+}
+
 function cloneLogicalMutationRegistrations(registrations) {
   return new Map(
     [...registrations].map(([target, options]) => [
@@ -231,45 +380,17 @@ function mutationMatchesRegistrations(
 }
 
 function buildMutationCoverage(activeObservers) {
-  const registrations = activeObservers.flatMap((observer) =>
-    [...observer.registrations].map(([target, options]) => ({
-      target,
-      options,
-    })),
-  );
-  const attributes = registrations.some(({ options }) => options.attributes);
-  const observeAllAttributes = registrations.some(
-    ({ options }) => options.attributes && !options.attributeFilter,
-  );
-  const attributeFilter = observeAllAttributes
-    ? undefined
-    : [
-        ...new Set(
-          registrations.flatMap(
-            ({ options }) => options.attributeFilter || [],
-          ),
-        ),
-      ];
-  const options = {
-    attributes,
-    attributeOldValue: registrations.some(
-      ({ options }) => options.attributeOldValue,
-    ),
-    childList: registrations.some(({ options }) => options.childList),
-    characterData: registrations.some(({ options }) => options.characterData),
-    characterDataOldValue: registrations.some(
-      ({ options }) => options.characterDataOldValue,
-    ),
-    subtree: registrations.some(({ options }) => options.subtree),
-  };
-  if (attributes && attributeFilter?.length) {
-    options.attributeFilter = attributeFilter;
-  }
+  const registrations = new Map();
+  activeObservers.forEach((observer) => {
+    observer.registrations.forEach((options, target) => {
+      registrations.set(
+        target,
+        mergeMutationOptions(registrations.get(target), options),
+      );
+    });
+  });
 
-  return {
-    options,
-    targets: new Set(registrations.map(({ target }) => target)),
-  };
+  return { registrations };
 }
 
 const { checkOnly, selfTestMode } = parseBuildArguments(
@@ -685,53 +806,356 @@ function runTransformSelfTests() {
   const rootTarget = {
     contains: (target) => target === descendantTarget,
   };
-  const broadCoverage = {
-    targets: new Set([rootTarget, descendantTarget]),
-    options: {
-      attributes: true,
-      childList: true,
-      characterData: true,
-      subtree: true,
-    },
+  const atomicObserverRegistry = new Set();
+  const atomicObserver = {
+    active: true,
+    generation: 4,
+    registrations: new Map([
+      [rootTarget, normaliseMutationOptions({ attributes: true })],
+    ]),
   };
-  const narrowerCoverage = {
-    targets: new Set([rootTarget]),
-    options: {
-      attributes: true,
-      attributeFilter: ["class", "style"],
-      childList: true,
-      characterData: false,
-      subtree: true,
+  atomicObserverRegistry.add(atomicObserver);
+  let atomicRefreshes = 0;
+  const nextAtomicAttributeFilter = ["class"];
+  replaceLogicalMutationRegistrations(
+    atomicObserver,
+    atomicObserverRegistry,
+    [
+      [rootTarget, {
+        attributes: true,
+        attributeFilter: nextAtomicAttributeFilter,
+      }],
+      [descendantTarget, { childList: true }],
+    ],
+    () => {
+      atomicRefreshes += 1;
     },
-  };
-  if (!mutationCoverageCovers(broadCoverage, narrowerCoverage)) {
-    throw new Error("Mutation coverage shrink self-test failed");
-  }
+  );
+  nextAtomicAttributeFilter.push("style");
   if (
-    !mutationCoverageCovers(
-      {
-        ...broadCoverage,
-        targets: new Set([rootTarget]),
-      },
-      {
-        ...narrowerCoverage,
-        targets: new Set([descendantTarget]),
-      },
+    atomicRefreshes !== 1 ||
+    !atomicObserver.active ||
+    atomicObserver.generation !== 4 ||
+    !atomicObserverRegistry.has(atomicObserver) ||
+    atomicObserver.registrations.size !== 2 ||
+    atomicObserver.registrations
+      .get(rootTarget)
+      ?.attributeFilter?.join(",") !== "class" ||
+    !atomicObserver.registrations.get(descendantTarget)?.childList
+  ) {
+    throw new Error("Mutation atomic replacement self-test failed");
+  }
+  const unrestrictedAttributeOptions = normaliseMutationOptions({
+    attributes: true,
+  });
+  const emptyAttributeFilterOptions = normaliseMutationOptions({
+    attributes: true,
+    attributeFilter: [],
+  });
+  const orderedAttributeFilterOptions = normaliseMutationOptions({
+    attributes: true,
+    attributeFilter: ["class", "style", "class"],
+  });
+  const reorderedAttributeFilterOptions = normaliseMutationOptions({
+    attributes: true,
+    attributeFilter: ["style", "class"],
+  });
+  if (
+    logicalMutationOptionsEqual(
+      unrestrictedAttributeOptions,
+      emptyAttributeFilterOptions,
+    ) ||
+    !logicalMutationOptionsEqual(
+      orderedAttributeFilterOptions,
+      reorderedAttributeFilterOptions,
     )
   ) {
-    throw new Error("Mutation ancestor coverage self-test failed");
+    throw new Error("Mutation logical option equality self-test failed");
+  }
+  replaceLogicalMutationRegistrations(
+    atomicObserver,
+    atomicObserverRegistry,
+    [
+      [rootTarget, {
+        attributes: true,
+        attributeFilter: ["class"],
+      }],
+      [descendantTarget, { childList: true }],
+    ],
+    () => {
+      atomicRefreshes += 1;
+    },
+  );
+  if (atomicRefreshes !== 1 || atomicObserver.generation !== 4) {
+    throw new Error("Mutation equivalent replacement self-test failed");
+  }
+
+  const rollbackRegistrations = atomicObserver.registrations;
+  let replacementFailureCaught = false;
+  try {
+    replaceLogicalMutationRegistrations(
+      atomicObserver,
+      atomicObserverRegistry,
+      [[unrelatedTarget, { childList: true }]],
+      () => {
+        throw new Error("simulated native replacement failure");
+      },
+    );
+  } catch (error) {
+    replacementFailureCaught =
+      error.message === "simulated native replacement failure";
+  }
+  if (
+    !replacementFailureCaught ||
+    atomicObserver.registrations !== rollbackRegistrations ||
+    !atomicObserver.active ||
+    atomicObserver.generation !== 4 ||
+    !atomicObserverRegistry.has(atomicObserver)
+  ) {
+    throw new Error("Mutation replacement rollback self-test failed");
+  }
+
+  let pendingRefreshState = true;
+  let pendingRefreshFailureCaught = false;
+  try {
+    refreshImmediatelyPreservingPendingState(
+      () => pendingRefreshState,
+      (pending) => {
+        pendingRefreshState = pending;
+      },
+      () => {
+        pendingRefreshState = false;
+        throw new Error("simulated pending refresh failure");
+      },
+    );
+  } catch (error) {
+    pendingRefreshFailureCaught =
+      error.message === "simulated pending refresh failure";
+  }
+  if (!pendingRefreshFailureCaught || !pendingRefreshState) {
+    throw new Error("Mutation pending refresh rollback self-test failed");
+  }
+
+  let invalidReplacementCaught = false;
+  try {
+    replaceLogicalMutationRegistrations(
+      atomicObserver,
+      atomicObserverRegistry,
+      [[unrelatedTarget, { attributes: false }]],
+      () => {
+        atomicRefreshes += 1;
+      },
+    );
+  } catch (error) {
+    invalidReplacementCaught = error instanceof TypeError;
+  }
+  if (
+    !invalidReplacementCaught ||
+    atomicObserver.registrations !== rollbackRegistrations ||
+    atomicRefreshes !== 1
+  ) {
+    throw new Error("Mutation replacement validation self-test failed");
+  }
+
+  replaceLogicalMutationRegistrations(
+    atomicObserver,
+    atomicObserverRegistry,
+    [],
+    () => {
+      atomicRefreshes += 1;
+    },
+  );
+  if (
+    atomicRefreshes !== 2 ||
+    atomicObserver.active ||
+    atomicObserver.generation !== 5 ||
+    atomicObserver.registrations.size ||
+    atomicObserverRegistry.has(atomicObserver)
+  ) {
+    throw new Error("Mutation empty replacement self-test failed");
+  }
+
+  const replacementOrder = [];
+  class FixtureNativeObserver {
+    observe() {
+      replacementOrder.push("replacement-observe");
+    }
+
+    disconnect() {
+      replacementOrder.push("replacement-disconnect");
+    }
+  }
+  const fixtureCurrentObserver = {
+    takeRecords() {
+      replacementOrder.push("current-take-records");
+      return ["record"];
+    },
+    disconnect() {
+      replacementOrder.push("current-disconnect");
+    },
+  };
+  const installedReplacement = installReplacementMutationObserver(
+    FixtureNativeObserver,
+    () => {},
+    {
+      registrations: new Map([
+        [rootTarget, normaliseMutationOptions({ childList: true })],
+      ]),
+    },
+    fixtureCurrentObserver,
+    (records) => {
+      if (records.join(",") !== "record") {
+        throw new Error("Mutation replacement record self-test failed");
+      }
+      replacementOrder.push("current-records-preserved");
+    },
+  );
+  if (
+    !(installedReplacement instanceof FixtureNativeObserver) ||
+    replacementOrder.join(",") !==
+      "replacement-observe,current-take-records,current-records-preserved,current-disconnect"
+  ) {
+    throw new Error("Mutation replacement ordering self-test failed");
+  }
+
+  const failureOrder = [];
+  class FailingFixtureNativeObserver {
+    observe() {
+      failureOrder.push("replacement-observe");
+      throw new Error("simulated observe failure");
+    }
+
+    disconnect() {
+      failureOrder.push("replacement-disconnect");
+    }
+  }
+  let nativeReplacementFailureCaught = false;
+  try {
+    installReplacementMutationObserver(
+      FailingFixtureNativeObserver,
+      () => {},
+      {
+        registrations: new Map([
+          [rootTarget, normaliseMutationOptions({ childList: true })],
+        ]),
+      },
+      fixtureCurrentObserver,
+      () => {
+        failureOrder.push("current-records-preserved");
+      },
+    );
+  } catch (error) {
+    nativeReplacementFailureCaught = error.message === "simulated observe failure";
+  }
+  if (
+    !nativeReplacementFailureCaught ||
+    failureOrder.join(",") !==
+      "replacement-observe,replacement-disconnect"
+  ) {
+    throw new Error("Mutation replacement failure-order self-test failed");
+  }
+
+
+  const preservationFailureOrder = [];
+  class PreservationFailureFixtureNativeObserver {
+    observe() {
+      preservationFailureOrder.push("replacement-observe");
+    }
+
+    disconnect() {
+      preservationFailureOrder.push("replacement-disconnect");
+    }
+  }
+  let preservationFailureCaught = false;
+  try {
+    installReplacementMutationObserver(
+      PreservationFailureFixtureNativeObserver,
+      () => {},
+      {
+        registrations: new Map([
+          [rootTarget, normaliseMutationOptions({ childList: true })],
+        ]),
+      },
+      {
+        takeRecords() {
+          preservationFailureOrder.push("current-take-records");
+          return ["record"];
+        },
+        disconnect() {
+          preservationFailureOrder.push("current-disconnect");
+        },
+      },
+      () => {
+        preservationFailureOrder.push("current-preserve-failed");
+        throw new Error("simulated preservation failure");
+      },
+    );
+  } catch (error) {
+    preservationFailureCaught =
+      error.message === "simulated preservation failure";
+  }
+  if (
+    !preservationFailureCaught ||
+    preservationFailureOrder.join(",") !==
+      "replacement-observe,current-take-records,current-preserve-failed,replacement-disconnect"
+  ) {
+    throw new Error("Mutation preservation rollback self-test failed");
+  }
+
+  const broadOptions = {
+    attributes: true,
+    childList: true,
+    characterData: true,
+    subtree: true,
+  };
+  const broadCoverage = {
+    registrations: new Map([
+      [rootTarget, broadOptions],
+      [descendantTarget, broadOptions],
+    ]),
+  };
+  const equivalentCoverage = {
+    registrations: new Map([
+      [rootTarget, { ...broadOptions }],
+      [descendantTarget, { ...broadOptions }],
+    ]),
+  };
+  const narrowerCoverage = {
+    registrations: new Map([
+      [rootTarget, {
+        attributes: true,
+        attributeFilter: ["class", "style"],
+        childList: true,
+        characterData: false,
+        subtree: true,
+      }],
+    ]),
+  };
+  if (!mutationCoverageCovers(broadCoverage, equivalentCoverage)) {
+    throw new Error("Mutation equivalent coverage self-test failed");
+  }
+  if (
+    mutationCoverageCovers(broadCoverage, {
+      registrations: new Map([[rootTarget, broadOptions]]),
+    })
+  ) {
+    throw new Error("Mutation target shrink self-test failed");
+  }
+  if (mutationCoverageCovers(broadCoverage, narrowerCoverage)) {
+    throw new Error("Mutation coverage shrink self-test failed");
   }
   if (
     mutationCoverageCovers(
       {
-        targets: new Set([rootTarget]),
-        options: {
-          attributes: true,
-          attributeFilter: ["class"],
-          childList: true,
-          characterData: false,
-          subtree: true,
-        },
+        registrations: new Map([
+          [rootTarget, {
+            attributes: true,
+            attributeFilter: ["class"],
+            childList: true,
+            characterData: false,
+            subtree: true,
+          }],
+        ]),
       },
       narrowerCoverage,
     )
@@ -740,8 +1164,9 @@ function runTransformSelfTests() {
   }
   if (
     mutationCoverageCovers(broadCoverage, {
-      ...narrowerCoverage,
-      targets: new Set([unrelatedTarget]),
+      registrations: new Map([
+        [unrelatedTarget, narrowerCoverage.registrations.get(rootTarget)],
+      ]),
     })
   ) {
     throw new Error("Mutation target expansion self-test failed");
@@ -829,16 +1254,72 @@ function runTransformSelfTests() {
   const registrationCoverage = buildMutationCoverage([
     { registrations },
   ]);
+  const rootCoverageOptions = registrationCoverage.registrations.get(rootTarget);
+  const descendantCoverageOptions =
+    registrationCoverage.registrations.get(descendantTarget);
   if (
-    registrationCoverage.targets.size !== 2 ||
-    !registrationCoverage.targets.has(rootTarget) ||
-    !registrationCoverage.targets.has(descendantTarget) ||
-    !registrationCoverage.options.attributes ||
-    !registrationCoverage.options.childList ||
-    !registrationCoverage.options.subtree ||
-    registrationCoverage.options.attributeFilter?.join(",") !== "style"
+    registrationCoverage.registrations.size !== 2 ||
+    !rootCoverageOptions?.attributes ||
+    rootCoverageOptions.childList ||
+    !rootCoverageOptions.subtree ||
+    rootCoverageOptions.attributeFilter?.join(",") !== "style" ||
+    descendantCoverageOptions?.attributes ||
+    !descendantCoverageOptions?.childList ||
+    descendantCoverageOptions.subtree
   ) {
     throw new Error("Mutation multi-target coverage self-test failed");
+  }
+
+  const mergedExactTargetCoverage = buildMutationCoverage([
+    {
+      registrations: new Map([
+        [rootTarget, {
+          attributes: true,
+          attributeFilter: ["class"],
+          subtree: true,
+        }],
+      ]),
+    },
+    {
+      registrations: new Map([
+        [rootTarget, {
+          attributes: true,
+          attributeFilter: ["style"],
+          childList: true,
+        }],
+      ]),
+    },
+  ]);
+  const mergedExactTargetOptions =
+    mergedExactTargetCoverage.registrations.get(rootTarget);
+  if (
+    mergedExactTargetCoverage.registrations.size !== 1 ||
+    !mergedExactTargetOptions?.attributes ||
+    !mergedExactTargetOptions?.childList ||
+    !mergedExactTargetOptions?.subtree ||
+    mergedExactTargetOptions.attributeFilter?.join(",") !== "class,style"
+  ) {
+    throw new Error("Mutation exact-target option merge self-test failed");
+  }
+
+  const unfilteredExactTargetCoverage = buildMutationCoverage([
+    {
+      registrations: new Map([
+        [rootTarget, {
+          attributes: true,
+          attributeFilter: ["class"],
+        }],
+      ]),
+    },
+    {
+      registrations: new Map([[rootTarget, { attributes: true }]]),
+    },
+  ]);
+  if (
+    "attributeFilter" in
+    unfilteredExactTargetCoverage.registrations.get(rootTarget)
+  ) {
+    throw new Error("Mutation unrestricted attribute merge self-test failed");
   }
 
   const registrationSnapshot =
@@ -981,11 +1462,17 @@ ${body
 
 const runtimeMutationCoverageHelpers = [
   mutationOptionsCover,
+  mergeMutationOptions,
   mutationCoverageCovers,
   normaliseMutationOptions,
   setLogicalMutationRegistration,
   clearLogicalMutationRegistrations,
   setSharedMutationObserverRegistryState,
+  logicalMutationOptionsEqual,
+  logicalMutationRegistrationsEqual,
+  refreshImmediatelyPreservingPendingState,
+  replaceLogicalMutationRegistrations,
+  installReplacementMutationObserver,
   cloneLogicalMutationRegistrations,
   mutationMatchesRegistrations,
   buildMutationCoverage,
@@ -1482,23 +1969,13 @@ ${runtimeMutationCoverageHelpers}
       return;
     }
 
-    if (nativeMutationObserver) {
-      preserveNativeMutationRecords(nativeMutationObserver.takeRecords());
-      nativeMutationObserver.disconnect();
-    }
-    nativeMutationObserver = null;
-    nativeMutationCoverage = null;
-    nativeLogicalObserverStates = new Map();
-
-    const replacementObserver = new NativeMutationObserver(dispatchMutations);
-    try {
-      requestedCoverage.targets.forEach((target) =>
-        replacementObserver.observe(target, requestedCoverage.options),
-      );
-    } catch (error) {
-      replacementObserver.disconnect();
-      throw error;
-    }
+    const replacementObserver = installReplacementMutationObserver(
+      NativeMutationObserver,
+      dispatchMutations,
+      requestedCoverage,
+      nativeMutationObserver,
+      preserveNativeMutationRecords,
+    );
     nativeMutationObserver = replacementObserver;
     nativeMutationCoverage = requestedCoverage;
     nativeLogicalObserverStates = requestedLogicalObserverStates;
@@ -1527,6 +2004,22 @@ ${runtimeMutationCoverageHelpers}
         true,
       );
       requestMutationRefresh();
+    }
+
+    replaceRegistrations(registrations) {
+      replaceLogicalMutationRegistrations(
+        this,
+        sharedMutationObservers,
+        registrations,
+        () =>
+          refreshImmediatelyPreservingPendingState(
+            () => mutationRefreshPending,
+            (pending) => {
+              mutationRefreshPending = pending;
+            },
+            refreshNativeMutationObserver,
+          ),
+      );
     }
 
     disconnect() {

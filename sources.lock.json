@@ -23,18 +23,18 @@
     },
     "playerPreferencesLite": {
       "path": "sources/modules/youtube-player-preferences-lite.user.js",
-      "version": "1.40",
-      "sha256": "eec9f5f2fcc0e095c00c62a0b27bd63b05f195f238fe37e2b2d4b30dc0933bc4"
+      "version": "1.42",
+      "sha256": "d9fc90c0d2cdd29c511809841266d99865a0edc4dbc8a438ed0ad2ca314fb468"
     },
     "scrollMiniplayer": {
       "path": "sources/modules/youtube-scroll-miniplayer.user.js",
-      "version": "5.18",
-      "sha256": "8ba933f67c03750ea10360457999deca7cfdc10cf57791eda138bd61a170667f"
+      "version": "5.19",
+      "sha256": "e3ff0832a76a144288d6d35b33e60fc0d4a102c220e003b89c02dc1f3064eb30"
     },
     "watchLayoutCleaner": {
       "path": "sources/modules/youtube-watch-layout-cleaner.user.js",
-      "version": "1.26",
-      "sha256": "f1f2522ef296c59cab06f4eca25a0be5a7122f1da8b16fd3b5eaf6957fcafac7"
+      "version": "1.27",
+      "sha256": "cc07242866209b31af3193d136795431a4d6e0224354f2b95fee86bfc75180ff"
     }
   }
 }
